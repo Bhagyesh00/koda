@@ -1,0 +1,15 @@
+node_modules
+dist
+.next
+out
+.turbo
+.env
+.env.local
+.env.*.local
+*.log
+.DS_Store
+.koda
+coverage
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json

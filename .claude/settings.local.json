@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat .koda/pids/*.pid)",
+      "Bash(netstat -ano)",
+      "Bash(tasklist //FI \"PID eq 992\")",
+      "Bash(tasklist //FI \"PID eq 4420\")",
+      "Bash(tasklist //FI \"PID eq 5880\")",
+      "Bash(grep -v '^$')",
+      "Bash(timeout 15 cmd //c pnpm dev)",
+      "Bash(timeout 20 powershell -NoProfile -Command \"pnpm dev\")",
+      "Bash(cmd //c \"dir C:\\\\Users\\\\ADMIN\\\\bin\")",
+      "Bash(cmd //c \"dir C:\\\\Users\\\\ADMIN\\\\AppData\\\\Local\\\\Programs\\\\Antigravity\\\\bin\")",
+      "Bash(cmd //c \"dir C:\\\\Users\\\\ADMIN\\\\AppData\\\\Local /b\")",
+      "Bash(cmd //c \"dir C:\\\\Users\\\\ADMIN\\\\AppData\\\\Local\\\\nvm /b\")",
+      "Bash(cmd //c \"dir C:\\\\Users\\\\ADMIN\\\\AppData\\\\Local\\\\pnpm /b\")",
+      "Bash(cmd //c \"cd /d C:\\\\Drive\\\\koda\\\\apps\\\\backend && pnpm dev\")",
+      "Bash(/c/Users/ADMIN/AppData/Local/pnpm/.tools/pnpm/9.0.0/bin/pnpm.CMD --version)",
+      "Bash(export PATH=\"/c/Users/ADMIN/AppData/Local/nvm/v22.22.2:/c/Users/ADMIN/AppData/Local/pnpm/.tools/pnpm/9.0.0/bin:$PATH\")",
+      "Bash(pnpm --version)",
+      "Bash(pnpm --filter @koda/frontend add diff)",
+      "Bash(pnpm --filter @koda/frontend add -D @types/diff)",
+      "Bash(pnpm --filter @koda/frontend typecheck)",
+      "Bash(pnpm -r run typecheck)",
+      "Bash(pnpm --filter @koda/frontend build)",
+      "Bash(ls /c/Drive/koda/apps/frontend/next.config*)",
+      "Bash(cat /c/Drive/koda/apps/frontend/next.config.*)",
+      "Bash(pnpm --filter @koda/shared build)",
+      "Bash(pnpm --filter @koda/backend typecheck)",
+      "Bash(pnpm --filter @koda/backend test)"
+    ]
+  }
+}

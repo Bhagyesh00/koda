@@ -1,0 +1,178 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#__next {
+  height: 100%;
+}
+
+body {
+  background-color: #0b0c0f;
+  color: #e6e8eb;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  -webkit-font-smoothing: antialiased;
+  background-image:
+    radial-gradient(ellipse 800px 600px at 0% 0%, rgba(217, 119, 87, 0.08), transparent 60%),
+    radial-gradient(ellipse 600px 400px at 100% 100%, rgba(232, 168, 124, 0.04), transparent 60%);
+  background-attachment: fixed;
+}
+
+::selection {
+  background: rgba(217, 119, 87, 0.35);
+  color: #fff;
+}
+
+/* thin scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #23272f;
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2d333b;
+}
+
+/* terminal-style caret used for streaming text */
+.koda-caret {
+  display: inline-block;
+  width: 0.55em;
+  margin-left: 1px;
+  color: #d97757;
+  animation: blink 1s steps(1) infinite;
+}
+
+/* glassmorphism utility used by composer + plan panel */
+.koda-glass {
+  background: rgba(17, 19, 23, 0.72);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* shimmering thinking bars */
+.koda-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 0%,
+    rgba(255, 255, 255, 0.12) 50%,
+    rgba(255, 255, 255, 0.04) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+}
+
+/* animated gradient progress bar */
+.koda-progress {
+  background: linear-gradient(90deg, #d97757, #e8a87c, #d97757);
+  background-size: 200% 100%;
+  animation: gradientShift 1.6s linear infinite;
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+@keyframes gradientShift {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
+}
+
+/* markdown styling — unchanged contracts, slightly refined */
+.prose-koda pre {
+  background: #0b0c0f;
+  border: 1px solid #23272f;
+  border-radius: 10px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.prose-koda code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+.prose-koda :not(pre) > code {
+  background: #1c2127;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: #e8a87c;
+}
+.prose-koda p {
+  margin: 0.5em 0;
+}
+.prose-koda ul,
+.prose-koda ol {
+  margin: 0.5em 0;
+  padding-left: 1.4em;
+}
+.prose-koda li {
+  margin: 0.2em 0;
+}
+.prose-koda h1,
+.prose-koda h2,
+.prose-koda h3 {
+  font-weight: 600;
+  margin: 0.9em 0 0.4em;
+  letter-spacing: -0.01em;
+}
+.prose-koda h1 {
+  font-size: 1.4em;
+}
+.prose-koda h2 {
+  font-size: 1.2em;
+}
+.prose-koda h3 {
+  font-size: 1.05em;
+}
+.prose-koda a {
+  color: #e8a87c;
+  text-decoration: underline;
+  text-decoration-color: rgba(232, 168, 124, 0.4);
+  text-underline-offset: 2px;
+}
+.prose-koda blockquote {
+  border-left: 3px solid #d97757;
+  padding-left: 12px;
+  color: #9aa3af;
+  margin: 0.6em 0;
+}
+.prose-koda table {
+  border-collapse: collapse;
+  margin: 0.6em 0;
+  font-size: 13px;
+}
+.prose-koda th,
+.prose-koda td {
+  border: 1px solid #23272f;
+  padding: 6px 10px;
+  text-align: left;
+}
+.prose-koda th {
+  background: #161a20;
+  font-weight: 600;
+}
