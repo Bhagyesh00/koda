@@ -90,6 +90,15 @@ export function Composer({
   const autoAccept = useChatStore((s) => s.autoAccept);
   const setAutoAccept = useChatStore((s) => s.setAutoAccept);
 
+  // Sync permissionMode when store mode changes externally (e.g. plan approval → build)
+  useEffect(() => {
+    if (mode === 'build' && permissionMode === 'plan') {
+      setPermissionMode('ask');
+    } else if (mode === 'plan' && permissionMode !== 'plan') {
+      setPermissionMode('plan');
+    }
+  }, [mode]);
+
   function handlePermissionChange(m: PermissionMode) {
     setPermissionMode(m);
     if (m === 'ask') { setAutoAccept(false); if (mode !== 'plan') setMode('build'); }

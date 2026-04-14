@@ -185,7 +185,7 @@ export default function Page() {
     };
   }, [sessionId, addWorkspaceChange]);
 
-  function handleSend(text: string, opts?: { showThinking?: boolean }) {
+  function handleSend(text: string, opts?: { showThinking?: boolean; modeOverride?: 'plan' | 'build' }) {
     if (!sessionId) return;
     // Strip metadata tags so only the user's actual message is visible in chat
     const displayText = text
@@ -198,7 +198,7 @@ export default function Page() {
     setError(null);
 
     abortRef.current = startChatStream(
-      { sessionId, message: text, mode, autoApproveAll: autoAccept, showThinking: opts?.showThinking },
+      { sessionId, message: text, mode: opts?.modeOverride ?? mode, autoApproveAll: autoAccept, showThinking: opts?.showThinking },
       {
         onEvent: (ev) => {
           switch (ev.type) {
@@ -455,7 +455,7 @@ export default function Page() {
             <PlanPanel
               sessionId={sessionId}
               content={planContent}
-              onApproved={() => handleSend('Execute the approved plan step by step.')}
+              onApproved={() => handleSend('Execute the approved plan step by step.', { modeOverride: 'build' })}
             />
           )}
           {guardrailsOpen && sessionId && (
