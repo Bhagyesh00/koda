@@ -23,7 +23,7 @@ const SLASH_COMMANDS = [
 
 interface Props {
   sessionId?: string | null;
-  onSend: (text: string) => void;
+  onSend: (text: string, opts?: { showThinking?: boolean }) => void;
   onStop: () => void;
   streaming: boolean;
   disabled?: boolean;
@@ -203,11 +203,6 @@ export function Composer({
 
     const parts: string[] = [];
 
-    // Inject thinking preference
-    if (!thinking) {
-      parts.push('<instruction>Do NOT use <think> tags. Respond directly without internal reasoning.</instruction>');
-    }
-
     // Inject web search requests
     const webItems = attached.filter((a) => a.type === 'web');
     for (const w of webItems) {
@@ -232,7 +227,7 @@ export function Composer({
 
     if (trimmed) parts.push(trimmed);
 
-    onSend(parts.join('\n\n'));
+    onSend(parts.join('\n\n'), { showThinking: thinking });
     setText('');
     setAttached([]);
     setSlashOpen(false);

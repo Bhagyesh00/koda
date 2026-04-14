@@ -60,7 +60,7 @@ export interface ChatStreamHandlers {
  * Returns an AbortController that can cancel the stream.
  */
 export function startChatStream(
-  body: { sessionId: string; message: string; mode?: SessionMode; autoApproveAll?: boolean },
+  body: { sessionId: string; message: string; mode?: SessionMode; autoApproveAll?: boolean; showThinking?: boolean },
   handlers: ChatStreamHandlers,
 ): AbortController {
   const ac = new AbortController();

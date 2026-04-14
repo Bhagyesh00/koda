@@ -97,10 +97,11 @@ export interface RunTurnOptions {
   sse: SSEWriter;
   signal?: AbortSignal;
   autoApproveAll?: boolean;
+  showThinking?: boolean;
 }
 
 export async function runTurn(opts: RunTurnOptions): Promise<void> {
-  const { sessionId, userMessage, sse, signal, autoApproveAll = false } = opts;
+  const { sessionId, userMessage, sse, signal, autoApproveAll = false, showThinking = true } = opts;
   const session = sessionStore.get(sessionId);
   if (!session) {
     sse.send({ type: 'error', code: 'not_found', message: 'session not found' });
@@ -208,10 +209,12 @@ export async function runTurn(opts: RunTurnOptions): Promise<void> {
       break;
     }
 
-    // Extract and emit thinking blocks
+    // Extract thinking blocks — only emit to frontend when showThinking is enabled
     const thinkingBlocks = extractThinkingBlocks(assistantText);
-    for (const block of thinkingBlocks) {
-      sse.send({ type: 'thinking', messageId, text: block });
+    if (showThinking) {
+      for (const block of thinkingBlocks) {
+        sse.send({ type: 'thinking', messageId, text: block });
+      }
     }
 
     // Phase 28 — Cost tracking

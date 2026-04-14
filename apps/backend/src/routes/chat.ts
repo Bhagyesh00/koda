@@ -12,6 +12,7 @@ const ChatBody = z.object({
   message: z.string().min(1),
   mode: SessionModeSchema.optional(),
   autoApproveAll: z.boolean().optional(),
+  showThinking: z.boolean().optional(),
 });
 
 chatRouter.post('/chat', async (req, res) => {
@@ -41,6 +42,7 @@ chatRouter.post('/chat', async (req, res) => {
       sse,
       signal: ac.signal,
       autoApproveAll: body.autoApproveAll,
+      showThinking: body.showThinking,
     });
   } catch (err) {
     if (!sse.isClosed) {

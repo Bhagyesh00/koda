@@ -156,7 +156,7 @@ export default function Page() {
         // Sync session-level state into store
         useChatStore.getState().setPinnedIntentLocal(session.pinnedIntent ?? null);
         useChatStore.getState().setTokenBudgetLocal(session.tokenBudget);
-        useChatStore.getState().resetCost();
+        useChatStore.getState().setCostUpdate(0, session.tokensUsed ?? 0, session.tokenBudget);
         try {
           const plan = await getPlan(sessionId);
           setPlanContent(plan.content);
@@ -185,14 +185,20 @@ export default function Page() {
     };
   }, [sessionId, addWorkspaceChange]);
 
-  function handleSend(text: string) {
+  function handleSend(text: string, opts?: { showThinking?: boolean }) {
     if (!sessionId) return;
-    appendUser(text);
+    // Strip metadata tags so only the user's actual message is visible in chat
+    const displayText = text
+      .replace(/<web_search[^/]*\/>\s*/g, '')
+      .replace(/<file[\s\S]*?<\/file>\s*/g, '')
+      .replace(/<folder[^/]*\/>\s*/g, '')
+      .trim() || text;
+    appendUser(displayText);
     setStreaming(true);
     setError(null);
 
     abortRef.current = startChatStream(
-      { sessionId, message: text, mode, autoApproveAll: autoAccept },
+      { sessionId, message: text, mode, autoApproveAll: autoAccept, showThinking: opts?.showThinking },
       {
         onEvent: (ev) => {
           switch (ev.type) {
