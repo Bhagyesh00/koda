@@ -8,6 +8,14 @@ import { bashTool } from './bash.js';
 import { listDirTool } from './listDir.js';
 import { todoWriteTool } from './todoWrite.js';
 import { planWriteTool } from './planWrite.js';
+import { decideTool } from './decide.js';
+import { hypothesisTool } from './hypothesis.js';
+import { proofTool } from './proof.js';
+import { webFetchTool } from './webFetch.js';
+import { webSearchTool } from './webSearch.js';
+import { gitStatusTool } from './gitStatus.js';
+import { gitLogTool } from './gitLog.js';
+import { gitDiffTool } from './gitDiff.js';
 
 let registered = false;
 
@@ -23,6 +31,14 @@ export function registerAllTools(): void {
   registerTool(listDirTool);
   registerTool(todoWriteTool);
   registerTool(planWriteTool);
+  registerTool(decideTool);
+  registerTool(hypothesisTool);
+  registerTool(proofTool);
+  registerTool(webFetchTool);
+  registerTool(webSearchTool);
+  registerTool(gitStatusTool);
+  registerTool(gitLogTool);
+  registerTool(gitDiffTool);
 }
 
 /** Tools allowed in plan mode (read-only + plan_write). */

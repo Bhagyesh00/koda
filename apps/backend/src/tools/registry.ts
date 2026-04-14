@@ -14,7 +14,7 @@ export interface Tool<TArgs = unknown> {
   name: string;
   description: string;
   requiresApproval: boolean;
-  schema: z.ZodType<TArgs>;
+  schema: z.ZodType<TArgs, z.ZodTypeDef, any>;
   run(args: TArgs, ctx: ToolContext): Promise<string>;
 }
 

@@ -2,7 +2,7 @@
   "name": "koda",
   "version": "0.1.0",
   "private": true,
-  "description": "Production-grade Claude Code clone powered by local Ollama (gemma4:e4b)",
+  "description": "Production-grade Claude Code clone powered by local Ollama (gemma4:e2b)",
   "packageManager": "pnpm@9.0.0",
   "engines": {
     "node": ">=20"

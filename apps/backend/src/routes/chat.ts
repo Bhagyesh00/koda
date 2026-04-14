@@ -5,12 +5,13 @@ import { runTurn } from '../agent/loop.js';
 import { sessionStore } from '../sessions/store.js';
 import { SessionModeSchema } from '@koda/shared';
 
-export const chatRouter = Router();
+export const chatRouter: Router = Router();
 
 const ChatBody = z.object({
   sessionId: z.string().min(1),
   message: z.string().min(1),
   mode: SessionModeSchema.optional(),
+  autoApproveAll: z.boolean().optional(),
 });
 
 chatRouter.post('/chat', async (req, res) => {
@@ -39,6 +40,7 @@ chatRouter.post('/chat', async (req, res) => {
       userMessage: body.message,
       sse,
       signal: ac.signal,
+      autoApproveAll: body.autoApproveAll,
     });
   } catch (err) {
     if (!sse.isClosed) {

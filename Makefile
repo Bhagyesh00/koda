@@ -12,7 +12,7 @@ else
   PNPM   ?= pnpm
   OLLAMA ?= ollama
 endif
-OLLAMA_MODEL ?= gemma4:e4b
+OLLAMA_MODEL ?= gemma4:e2b
 BACKEND_PORT ?= 4001
 FRONTEND_PORT?= 4000
 ENV_FILE     ?= .env
@@ -53,44 +53,21 @@ list-models: ## List installed Ollama models
 
 # ---- dev ----
 .PHONY: dev
-dev: ## Run backend + frontend in parallel (foreground)
+dev: ## Start backend (nodemon) + frontend (next dev) in parallel
 	$(PNPM) dev
 
-# ---- start / stop (Windows: spawns labelled cmd windows) ----
-.PHONY: start
-start: ## Launch Ollama + Koda in two background cmd windows
-	@node scripts/start.mjs
-
-.PHONY: stop
-stop: ## Close the cmd windows started by 'make start'
-	@node scripts/stop.mjs
-
-.PHONY: restart
-restart: stop start ## Stop and start again
-
-.PHONY: logs
-logs: ## Show last 40 lines of backend + frontend + ollama logs
-	@node -e "const fs=require('fs');for(const f of ['logs/backend.log','logs/frontend.log','logs/ollama.log']){console.log('\\n=== '+f+' ===');try{const t=fs.readFileSync(f,'utf8').split(/\\r?\\n/).slice(-40).join('\\n');console.log(t||'(empty)');}catch{console.log('(no log yet)');}}"
-
-.PHONY: logs-backend
-logs-backend: ## Tail logs/backend.log
-	@node -e "const fs=require('fs');try{console.log(fs.readFileSync('logs/backend.log','utf8'));}catch{console.log('(no log)');}"
-
-.PHONY: logs-frontend
-logs-frontend: ## Tail logs/frontend.log
-	@node -e "const fs=require('fs');try{console.log(fs.readFileSync('logs/frontend.log','utf8'));}catch{console.log('(no log)');}"
-
-.PHONY: status
-status: ## Show whether backend + ollama are reachable
-	@node -e "Promise.all([fetch('http://localhost:11434/api/tags').then(r=>r.ok).catch(()=>false),fetch('http://localhost:$(BACKEND_PORT)/v1/health').then(r=>r.ok).catch(()=>false)]).then(([o,b])=>{console.log('ollama  : '+(o?'UP':'DOWN'));console.log('backend : '+(b?'UP':'DOWN'));})"
-
 .PHONY: dev-backend
-dev-backend: ## Run backend only (watch mode)
+dev-backend: ## Run backend only — nodemon restarts on src/ + shared/ changes
 	$(PNPM) --filter @koda/backend dev
 
 .PHONY: dev-frontend
-dev-frontend: ## Run frontend only
+dev-frontend: ## Run frontend only — Next.js HMR on http://localhost:$(FRONTEND_PORT)
 	$(PNPM) --filter @koda/frontend dev
+
+# ---- status / logs ----
+.PHONY: status
+status: ## Show whether backend + ollama are reachable
+	@node -e "Promise.all([fetch('http://localhost:11434/api/tags').then(r=>r.ok).catch(()=>false),fetch('http://localhost:$(BACKEND_PORT)/v1/health').then(r=>r.ok).catch(()=>false)]).then(([o,b])=>{console.log('ollama  : '+(o?'UP':'DOWN'));console.log('backend : '+(b?'UP':'DOWN'));})"
 
 # ---- build ----
 .PHONY: build

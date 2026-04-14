@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { User, Check, Copy } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { Logo } from './Logo';
@@ -10,11 +10,20 @@ interface Props {
   role: 'user' | 'assistant';
   text: string;
   streaming?: boolean;
+  startedAt?: number;
 }
 
-export function MessageBubble({ role, text, streaming }: Props) {
+export function MessageBubble({ role, text, streaming, startedAt }: Props) {
   const isUser = role === 'user';
   const [copied, setCopied] = useState(false);
+  const [now, setNow] = useState(Date.now());
+
+  // Tick while streaming so elapsed time updates live
+  useEffect(() => {
+    if (!streaming) return;
+    const id = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(id);
+  }, [streaming]);
 
   async function handleCopy() {
     try {
@@ -27,7 +36,12 @@ export function MessageBubble({ role, text, streaming }: Props) {
   }
 
   // Empty assistant message while waiting for first token: shimmer placeholder
-  const showThinking = !isUser && !text && streaming;
+  const showShimmer = !isUser && !text && streaming;
+
+  const durationMs = !isUser && startedAt ? (streaming ? now : Date.now()) - startedAt : null;
+  // Show the elapsed timer while streaming AND after — it ticks live during thinking,
+  // then freezes at the final value once the response is complete.
+  const durationLabel = durationMs != null && durationMs > 0 ? formatDuration(durationMs) : null;
 
   return (
     <div className="group flex gap-3 px-6 py-4">
@@ -53,11 +67,14 @@ export function MessageBubble({ role, text, streaming }: Props) {
               {copied ? 'copied' : 'copy'}
             </button>
           )}
+          {durationLabel && (
+            <span className="ml-auto text-[10px] tabular-nums text-fg-subtle">{durationLabel}</span>
+          )}
         </div>
 
         {isUser ? (
           <div className="whitespace-pre-wrap break-words text-[14px] text-fg">{text}</div>
-        ) : showThinking ? (
+        ) : showShimmer ? (
           <div className="space-y-2 py-1">
             <div className="koda-shimmer h-3 w-3/5 rounded" />
             <div className="koda-shimmer h-3 w-2/5 rounded" />
@@ -71,4 +88,9 @@ export function MessageBubble({ role, text, streaming }: Props) {
       </div>
     </div>
   );
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }

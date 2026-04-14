@@ -22,13 +22,21 @@ function findEnvFile(): string | undefined {
 loadDotenv({ path: findEnvFile() });
 
 const ConfigSchema = z.object({
-  BACKEND_PORT: z.coerce.number().int().positive().default(8787),
+  BACKEND_PORT: z.coerce.number().int().positive().default(4001),
   WORK_DIR: z.string().default('./workspace'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   AUTH_TOKEN: z.string().min(1).default('dev-secret-change-me'),
   OLLAMA_BASE_URL: z.string().url().default('http://localhost:11434'),
-  OLLAMA_MODEL: z.string().min(1).default('gemma4:e4b'),
-  CORS_ORIGIN: z.string().default('http://localhost:3000'),
+  OLLAMA_MODEL: z.string().min(1).default('gemma4:e2b'),
+  /** Context window size passed to Ollama. Increase for larger codebases. */
+  OLLAMA_NUM_CTX: z.coerce.number().int().positive().default(32768),
+  /**
+   * Optional Brave Search API key for web_search.
+   * When absent, the tool falls back to DuckDuckGo HTML scraping (no key needed).
+   * Get a free key at https://brave.com/search/api/
+   */
+  BRAVE_SEARCH_API_KEY: z.string().optional(),
+  CORS_ORIGIN: z.string().default('http://localhost:4000'),
 });
 
 const parsed = ConfigSchema.parse(process.env);

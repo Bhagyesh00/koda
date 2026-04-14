@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { config } from '../config.js';
 
-export const healthRouter = Router();
+export const healthRouter: Router = Router();
 
 healthRouter.get('/health', async (_req, res) => {
   let ollamaOk = false;

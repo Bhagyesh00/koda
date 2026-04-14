@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, Loader2, X, AlertCircle, Folder } from 'lucide-react';
 import type { Session } from '@koda/shared';
 import { createSession } from '@/lib/api';
+import { FolderPicker } from './FolderPicker';
 
 interface Props {
   open: boolean;
@@ -23,6 +24,7 @@ export function NewChatModal({ open, onClose, onCreated, recentCwds = [] }: Prop
   const [title, setTitle] = useState('');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Reset state and focus the path input each time the modal opens.
@@ -32,6 +34,7 @@ export function NewChatModal({ open, onClose, onCreated, recentCwds = [] }: Prop
     setTitle('');
     setError(null);
     setCreating(false);
+    setPickerOpen(false);
     const t = setTimeout(() => inputRef.current?.focus(), 30);
     return () => clearTimeout(t);
   }, [open]);
@@ -122,6 +125,15 @@ export function NewChatModal({ open, onClose, onCreated, recentCwds = [] }: Prop
                 spellCheck={false}
                 className="min-w-0 flex-1 bg-transparent font-mono text-[12.5px] text-fg outline-none placeholder:text-fg-subtle disabled:opacity-50"
               />
+              <button
+                type="button"
+                onClick={() => setPickerOpen(true)}
+                disabled={creating}
+                className="shrink-0 rounded border border-border bg-bg px-2 py-0.5 text-[10px] font-medium text-fg-muted transition hover:border-accent/40 hover:text-fg disabled:opacity-50"
+                title="Browse for folder"
+              >
+                Browse…
+              </button>
             </div>
             <p className="mt-1.5 text-[11px] leading-relaxed text-fg-subtle">
               Koda will read, edit, and run commands inside this folder only. Must be an absolute
@@ -198,6 +210,18 @@ export function NewChatModal({ open, onClose, onCreated, recentCwds = [] }: Prop
           </button>
         </div>
       </div>
+
+      {pickerOpen && (
+        <FolderPicker
+          initialPath={cwd.trim() || undefined}
+          onSelect={(p) => {
+            setCwd(p);
+            setPickerOpen(false);
+            setTimeout(() => inputRef.current?.focus(), 0);
+          }}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
     </div>
   );
 }

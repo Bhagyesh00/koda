@@ -3,7 +3,7 @@ import { EditFileArgs } from '@koda/shared';
 import type { Tool } from './registry.js';
 import { resolveInside } from '../sandbox/fs.js';
 
-export const editFileTool: Tool<typeof EditFileArgs._type> = {
+export const editFileTool: Tool<EditFileArgs> = {
   name: 'edit_file',
   description: 'Replace an exact string in a file. Requires user approval.',
   requiresApproval: true,

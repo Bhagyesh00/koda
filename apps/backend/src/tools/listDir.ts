@@ -3,7 +3,7 @@ import { ListDirArgs } from '@koda/shared';
 import type { Tool } from './registry.js';
 import { resolveInside } from '../sandbox/fs.js';
 
-export const listDirTool: Tool<typeof ListDirArgs._type> = {
+export const listDirTool: Tool<ListDirArgs> = {
   name: 'list_dir',
   description: 'List entries of a directory inside the working directory.',
   requiresApproval: false,

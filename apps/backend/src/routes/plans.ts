@@ -3,14 +3,16 @@ import { Router } from 'express';
 import { sessionStore } from '../sessions/store.js';
 import { planFilePath } from '../tools/planWrite.js';
 import { NotFoundError } from '../errors.js';
+import { config } from '../config.js';
 
-export const plansRouter = Router();
+export const plansRouter: Router = Router();
 
 plansRouter.get('/plans/:id', async (req, res) => {
   const id = req.params.id ?? '';
   const session = sessionStore.get(id);
   if (!session) throw new NotFoundError('session');
-  const file = planFilePath(id);
+  const workDir = session.cwd ?? config.WORK_DIR_ABS;
+  const file = planFilePath(id, workDir);
   try {
     const content = await fs.readFile(file, 'utf8');
     res.json({ content, exists: true, mode: session.mode });

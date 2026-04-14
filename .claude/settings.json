@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la /c/Drive/koda/apps/backend/src/tools/*.ts)",
+      "WebSearch",
+      "Read(//c/Drive/**)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); msgs=d.get\\('messages',[]\\); [print\\(f'[{m[\\\\\"role\\\\\"]}] {m[\\\\\"content\\\\\"][:300]}'\\) for m in msgs[-10:]]\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); msgs=d.get\\('messages',[]\\); print\\(f'Total messages: {len\\(msgs\\)}'\\); [print\\(f'  [{i}] {m[\\\\\"role\\\\\"]}: {m[\\\\\"content\\\\\"][:200]}'\\) for i,m in enumerate\\(msgs\\)]\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('scripts',{}\\), indent=2\\)\\)\")",
+      "Bash(npx tsc:*)",
+      "Bash(pnpm --filter @koda/shared typecheck)",
+      "Skill(senior-software-architect)",
+      "Skill(senior-software-architect:*)",
+      "Skill(senior-qa-engineer)",
+      "Skill(senior-qa-engineer:*)",
+      "Bash(ollama list:*)",
+      "Bash(xargs grep:*)",
+      "Bash(pnpm --filter @koda/backend add -D nodemon)",
+      "Bash(npx nodemon:*)",
+      "Bash(make help:*)"
+    ],
+    "additionalDirectories": [
+      "c:\\Drive\\koda"
+    ]
+  }
+}

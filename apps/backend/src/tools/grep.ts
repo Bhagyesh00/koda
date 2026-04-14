@@ -4,7 +4,7 @@ import path from 'node:path';
 import { GrepArgs } from '@koda/shared';
 import type { Tool } from './registry.js';
 
-export const grepTool: Tool<typeof GrepArgs._type> = {
+export const grepTool: Tool<GrepArgs> = {
   name: 'grep',
   description: 'Search file contents by regex pattern.',
   requiresApproval: false,
