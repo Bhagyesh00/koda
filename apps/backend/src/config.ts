@@ -26,10 +26,13 @@ const ConfigSchema = z.object({
   WORK_DIR: z.string().default('./workspace'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   AUTH_TOKEN: z.string().min(1).default('dev-secret-change-me'),
-  OLLAMA_BASE_URL: z.string().url().default('http://localhost:11434'),
-  OLLAMA_MODEL: z.string().min(1).default('gemma4:e2b'),
+  OLLAMA_BASE_URL: z.string().url().default('http://103.186.18.11:11434'),
+  OLLAMA_MODEL: z.string().min(1).default('koda'),
   /** Context window size passed to Ollama. Increase for larger codebases. */
   OLLAMA_NUM_CTX: z.coerce.number().int().positive().default(32768),
+  /** Optional HTTP Basic Auth credentials for a password-protected Ollama server. */
+  OLLAMA_USERNAME: z.string().optional(),
+  OLLAMA_PASSWORD: z.string().optional(),
   /**
    * Optional Brave Search API key for web_search.
    * When absent, the tool falls back to DuckDuckGo HTML scraping (no key needed).

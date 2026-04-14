@@ -8,6 +8,7 @@ loadEnv({ path: path.resolve(__dirname, '../../.env') });
 const config: NextConfig = {
   reactStrictMode: true,
   transpilePackages: ['@koda/shared'],
+  output: 'standalone',
 };
 
 export default config;

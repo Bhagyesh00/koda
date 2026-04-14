@@ -32,6 +32,10 @@ export function CostMeter({ sessionId }: Props) {
     if (!sessionId) return;
     const n = budgetInput ? parseInt(budgetInput, 10) : null;
     if (n !== null && (isNaN(n) || n <= 0)) return;
+    if (n !== null && n < 1_000) {
+      addToast('Minimum budget is 1,000 tokens — a single turn typically uses 500–2,000', 'error');
+      return;
+    }
     try {
       await setTokenBudget(sessionId, n);
       setTokenBudgetLocal(n ?? undefined);

@@ -12,7 +12,7 @@ else
   PNPM   ?= pnpm
   OLLAMA ?= ollama
 endif
-OLLAMA_MODEL ?= gemma4:e2b
+OLLAMA_MODEL ?= koda
 BACKEND_PORT ?= 4001
 FRONTEND_PORT?= 4000
 ENV_FILE     ?= .env
@@ -45,7 +45,7 @@ ollama-serve: ## Start the Ollama server in foreground
 
 .PHONY: ollama-check
 ollama-check: ## Check that Ollama is reachable
-	@node -e "fetch('http://localhost:11434/api/tags').then(r=>{if(r.ok){console.log('ollama: OK');}else{console.log('ollama: status '+r.status);process.exit(1);}}).catch(e=>{console.log('ollama: NOT REACHABLE -- run \"make ollama-serve\" in another terminal');process.exit(1);})"
+	@node -e "fetch('http://103.186.18.11:11434/api/tags').then(r=>{if(r.ok){console.log('ollama: OK');}else{console.log('ollama: status '+r.status);process.exit(1);}}).catch(e=>{console.log('ollama: NOT REACHABLE -- run \"make ollama-serve\" in another terminal');process.exit(1);})"
 
 .PHONY: list-models
 list-models: ## List installed Ollama models
@@ -67,7 +67,7 @@ dev-frontend: ## Run frontend only — Next.js HMR on http://localhost:$(FRONTEN
 # ---- status / logs ----
 .PHONY: status
 status: ## Show whether backend + ollama are reachable
-	@node -e "Promise.all([fetch('http://localhost:11434/api/tags').then(r=>r.ok).catch(()=>false),fetch('http://localhost:$(BACKEND_PORT)/v1/health').then(r=>r.ok).catch(()=>false)]).then(([o,b])=>{console.log('ollama  : '+(o?'UP':'DOWN'));console.log('backend : '+(b?'UP':'DOWN'));})"
+	@node -e "Promise.all([fetch('http://103.186.18.11:11434/api/tags').then(r=>r.ok).catch(()=>false),fetch('http://localhost:$(BACKEND_PORT)/v1/health').then(r=>r.ok).catch(()=>false)]).then(([o,b])=>{console.log('ollama  : '+(o?'UP':'DOWN'));console.log('backend : '+(b?'UP':'DOWN'));})"
 
 # ---- build ----
 .PHONY: build

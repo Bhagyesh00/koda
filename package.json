@@ -2,21 +2,30 @@
   "name": "koda",
   "version": "0.1.0",
   "private": true,
-  "description": "Production-grade Claude Code clone powered by local Ollama (gemma4:e2b)",
+  "description": "Production-grade Claude Code clone powered by local Ollama (koda)",
   "packageManager": "pnpm@9.0.0",
   "engines": {
     "node": ">=20"
   },
+  "main": "electron/dist/main.js",
   "scripts": {
     "dev": "pnpm -r --parallel --filter \"./apps/*\" run dev",
     "build": "pnpm -r run build",
     "test": "pnpm -r run test",
     "lint": "pnpm -r run lint",
     "typecheck": "pnpm -r run typecheck",
-    "clean": "pnpm -r exec rm -rf dist .next node_modules"
+    "clean": "pnpm -r exec rm -rf dist .next node_modules",
+
+    "electron:dev": "pnpm electron:compile && electron .",
+    "electron:compile": "tsc -p electron/tsconfig.json",
+    "electron:bundle-backend": "node scripts/bundle-backend.mjs",
+    "electron:build": "pnpm build && pnpm electron:bundle-backend && pnpm electron:compile && electron-builder"
   },
   "devDependencies": {
     "typescript": "^5.6.3",
-    "prettier": "^3.3.3"
+    "prettier": "^3.3.3",
+    "electron": "^34.0.0",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.0"
   }
 }

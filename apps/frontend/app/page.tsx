@@ -442,7 +442,11 @@ export default function Page() {
         <div className="flex flex-1 overflow-hidden">
           <ChatThread onDecisionResolve={handleDecisionResolve} onReplay={handleReplay} />
           {showPlanPanel && sessionId && (
-            <PlanPanel sessionId={sessionId} content={planContent} />
+            <PlanPanel
+              sessionId={sessionId}
+              content={planContent}
+              onApproved={() => handleSend('Execute the approved plan step by step.')}
+            />
           )}
           {guardrailsOpen && sessionId && (
             <GuardrailsPanel sessionId={sessionId} onClose={() => setGuardrailsOpen(false)} />

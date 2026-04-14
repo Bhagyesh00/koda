@@ -17,7 +17,11 @@
       "Bash(xargs grep:*)",
       "Bash(pnpm --filter @koda/backend add -D nodemon)",
       "Bash(npx nodemon:*)",
-      "Bash(make help:*)"
+      "Bash(make help:*)",
+      "Bash(rm -rf node_modules/.pnpm/electron@34.5.8)",
+      "Bash(pnpm install:*)",
+      "Bash(pnpm electron:compile)",
+      "Read(//c/Users/ADMIN/.claude/**)"
     ],
     "additionalDirectories": [
       "c:\\Drive\\koda"

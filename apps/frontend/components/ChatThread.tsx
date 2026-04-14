@@ -81,6 +81,7 @@ export function ChatThread({ onDecisionResolve, onReplay }: Props) {
                     text={displayText}
                     streaming={m.streaming}
                     startedAt={m.startedAt}
+                    endedAt={m.endedAt}
                   />
                 )}
               </Fragment>

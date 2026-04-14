@@ -8,6 +8,8 @@ export interface ToolContext {
    * global WORK_DIR. Tools should sandbox all paths against this.
    */
   workDir: string;
+  /** Forwarded from the HTTP request — fires when the client disconnects or hits abort. */
+  signal?: AbortSignal;
 }
 
 export interface Tool<TArgs = unknown> {

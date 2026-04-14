@@ -10,7 +10,7 @@ import { clearSessionMessages, compactSession, updateSessionModel } from '@/lib/
 const SLASH_COMMANDS = [
   { cmd: '/clear', desc: 'Clear chat history for this session' },
   { cmd: '/compact', desc: 'Compact history — keep last 20 messages' },
-  { cmd: '/model', desc: 'Switch model, e.g. /model gemma4:e2b' },
+  { cmd: '/model', desc: 'Switch model, e.g. /model koda' },
 ] as const;
 
 interface Props {

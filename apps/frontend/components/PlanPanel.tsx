@@ -9,6 +9,7 @@ import { MarkdownRenderer } from './MarkdownRenderer';
 interface Props {
   sessionId: string;
   content: string;
+  onApproved: () => void;
 }
 
 /**
@@ -16,7 +17,7 @@ interface Props {
  * user approve it (which switches the session from plan → build mode on
  * the backend and emits a mode_change event over SSE).
  */
-export function PlanPanel({ sessionId, content }: Props) {
+export function PlanPanel({ sessionId, content, onApproved }: Props) {
   const setMode = useChatStore((s) => s.setMode);
   const [approving, setApproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -26,9 +27,9 @@ export function PlanPanel({ sessionId, content }: Props) {
     setError(null);
     try {
       await approvePlan(sessionId);
-      // Optimistically flip locally; backend will also emit mode_change
-      // on the next chat turn so the SSE stream stays consistent.
       setMode('build');
+      // Kick off the first build turn so the agent starts executing the plan.
+      onApproved();
     } catch (e) {
       setError((e as Error).message);
     } finally {

@@ -41,7 +41,7 @@ function spawnWindow(name, title, command) {
 // 1. Ollama (skip if already running)
 let ollamaUp = false;
 try {
-  ollamaUp = (await fetch('http://localhost:11434/api/tags')).ok;
+  ollamaUp = (await fetch('http://103.186.18.11:11434/api/tags')).ok;
 } catch {
   /* not running */
 }

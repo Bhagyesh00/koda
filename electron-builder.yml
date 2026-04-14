@@ -1,0 +1,55 @@
+appId: com.koda.app
+productName: Koda
+copyright: Copyright © 2026
+
+directories:
+  output: dist-electron
+
+# Only ship the compiled Electron main process (no source, no node_modules)
+files:
+  - electron/dist/**
+  - package.json
+
+# Everything else ships as unpacked resources (accessible at process.resourcesPath)
+extraResources:
+  # Bundled backend (single esbuild CJS file, no node_modules needed)
+  - from: electron-build/backend.cjs
+    to: backend.cjs
+
+  # Next.js standalone server (includes its own node_modules)
+  - from: apps/frontend/.next/standalone
+    to: frontend
+
+  # Static assets — Next.js standalone doesn't include these; copy separately
+  - from: apps/frontend/.next/static
+    to: frontend/.next/static
+
+  # Public folder (logo, favicon, etc.)
+  - from: apps/frontend/public
+    to: frontend/public
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  # icon: electron/assets/icon.ico  # Uncomment after adding a 256x256 .ico file
+
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  # icon: electron/assets/icon.icns  # Uncomment after adding a .icns file
+  category: public.app-category.developer-tools
+
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+  # icon: electron/assets/icon.png  # Uncomment after adding a 512x512 .png file
+  category: Development
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true

@@ -184,7 +184,11 @@ type ServerEvent =
   | { type: 'delta'; messageId; text }
   | { type: 'thinking'; messageId; text }
   | { type: 'message_end'; messageId }
-  | { type: 'activity_update'; phase: 'thinking'|'reading'|'writing'|'running'|'idle'; tool? }
+  | {
+      type: 'activity_update';
+      phase: 'thinking' | 'reading' | 'writing' | 'running' | 'idle';
+      tool?;
+    }
 
   // Tool flow
   | { type: 'tool_request'; callId; tool; args; requiresApproval }
@@ -196,19 +200,19 @@ type ServerEvent =
   | { type: 'done' }
 
   // Phase 13 — Guardrails
-  | { type: 'guardrail_triggered'; ruleId; action: 'block'|'warn'; message; tool }
+  | { type: 'guardrail_triggered'; ruleId; action: 'block' | 'warn'; message; tool }
 
   // Phase 14 — Decisions
   | { type: 'decision_request'; callId; question; options }
 
   // Phase 15 — Ambient watch
-  | { type: 'workspace_change'; files; changeType: 'modified'|'added'|'deleted' }
+  | { type: 'workspace_change'; files; changeType: 'modified' | 'added' | 'deleted' }
 
   // Phase 16 — Context Lens
   | { type: 'context_update'; files }
 
   // Phase 19 — Hypotheses
-  | { type: 'hypothesis_update'; id; result: 'confirmed'|'refuted'|'pending'; actualOutcome? }
+  | { type: 'hypothesis_update'; id; result: 'confirmed' | 'refuted' | 'pending'; actualOutcome? }
 
   // Phase 12 — Snapshots
   | { type: 'snapshot_created'; ref; description; ts }
@@ -265,13 +269,13 @@ Decision-mode (Phase 14) reuses the same primitive: `approvalQueue.requestDecisi
 - **Shell**: `sandbox/exec.ts:runShell()` uses `execa` with scrubbed env, 60 s timeout, output capped at 100 KB.
 - **Auth**: bearer token required on `/v1/*` (except `/v1/health`). Token never leaves the Next.js server.
 - **CORS**: single allowlisted origin via `CORS_ORIGIN`.
-- **Guardrails (Phase 13)**: a per-session rule engine that runs *before* the approval gate — blocks or warns based on path globs and command regexes.
+- **Guardrails (Phase 13)**: a per-session rule engine that runs _before_ the approval gate — blocks or warns based on path globs and command regexes.
 
 See [`SECURITY.md`](./SECURITY.md) for details.
 
 ## Why the fenced-JSON tool protocol?
 
-`gemma4:e2b` (and most small open-weight models) don't reliably emit Ollama's native `tool_calls` field. Instead, the system prompt instructs the model to emit:
+`koda` (and most small open-weight models) don't reliably emit Ollama's native `tool_calls` field. Instead, the system prompt instructs the model to emit:
 
 ````
 ```tool_call

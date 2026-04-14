@@ -1,7 +1,7 @@
 import { execa } from 'execa';
 import { config } from '../config.js';
 
-const DEFAULT_TIMEOUT = 60_000;
+const DEFAULT_TIMEOUT = 300_000; // 5 minutes — large file writes can easily exceed 60 s
 const MAX_OUTPUT = 100_000;
 
 export interface ExecResult {
@@ -15,6 +15,7 @@ export interface ExecResult {
 export interface RunShellOptions {
   cwd?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 /**
@@ -51,6 +52,7 @@ export async function runShell(
       env: buildSubprocessEnv(),
       extendEnv: false,
       maxBuffer: MAX_OUTPUT * 2,
+      cancelSignal: opts.signal,
     });
     return {
       ok: result.exitCode === 0,

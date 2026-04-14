@@ -11,14 +11,16 @@ interface Props {
   text: string;
   streaming?: boolean;
   startedAt?: number;
+  /** Timestamp captured the moment streaming ended. Absent for historical messages. */
+  endedAt?: number;
 }
 
-export function MessageBubble({ role, text, streaming, startedAt }: Props) {
+export function MessageBubble({ role, text, streaming, startedAt, endedAt }: Props) {
   const isUser = role === 'user';
   const [copied, setCopied] = useState(false);
   const [now, setNow] = useState(Date.now());
 
-  // Tick while streaming so elapsed time updates live
+  // Tick only while streaming so elapsed time updates live
   useEffect(() => {
     if (!streaming) return;
     const id = setInterval(() => setNow(Date.now()), 500);
@@ -38,9 +40,16 @@ export function MessageBubble({ role, text, streaming, startedAt }: Props) {
   // Empty assistant message while waiting for first token: shimmer placeholder
   const showShimmer = !isUser && !text && streaming;
 
-  const durationMs = !isUser && startedAt ? (streaming ? now : Date.now()) - startedAt : null;
-  // Show the elapsed timer while streaming AND after — it ticks live during thinking,
-  // then freezes at the final value once the response is complete.
+  // While streaming: tick live. Once done: freeze at endedAt. Historical messages
+  // (no endedAt) show nothing — we don't know when they actually finished.
+  const durationMs =
+    !isUser && startedAt
+      ? streaming
+        ? now - startedAt
+        : endedAt != null
+          ? endedAt - startedAt
+          : null
+      : null;
   const durationLabel = durationMs != null && durationMs > 0 ? formatDuration(durationMs) : null;
 
   return (

@@ -75,8 +75,10 @@ export async function streamOllamaChat(
       // Use the configured context window (default 32 768 — matches modern
       // Ollama model defaults and gives comfortable headroom for long sessions).
       num_ctx: config.OLLAMA_NUM_CTX,
-      // Allow longer responses for complex multi-file edits or explanations.
-      num_predict: 4096,
+      // Allow the model to use the full context window for output. A hard
+      // 4096-token cap silently truncates large file writes mid-JSON, causing
+      // the tool call to be unparseable and the task to stop with no error.
+      num_predict: config.OLLAMA_NUM_CTX,
       // Reduce repetitive output — common with smaller coding models.
       repeat_penalty: 1.1,
       ...(options?.seed !== undefined ? { seed: options.seed } : {}),
@@ -94,9 +96,15 @@ export async function streamOllamaChat(
     'ollama request',
   );
 
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (config.OLLAMA_USERNAME && config.OLLAMA_PASSWORD) {
+    const token = Buffer.from(`${config.OLLAMA_USERNAME}:${config.OLLAMA_PASSWORD}`).toString('base64');
+    headers['Authorization'] = `Basic ${token}`;
+  }
+
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(body),
     signal,
   });

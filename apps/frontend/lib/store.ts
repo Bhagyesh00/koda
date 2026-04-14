@@ -24,7 +24,7 @@ export type DecisionOption = { label: string; pros: string[]; cons: string[] };
 
 export type DisplayMessage =
   | { kind: 'user'; id: string; text: string }
-  | { kind: 'assistant'; id: string; text: string; streaming: boolean; startedAt: number }
+  | { kind: 'assistant'; id: string; text: string; streaming: boolean; startedAt: number; endedAt?: number }
   | { kind: 'thinking'; id: string; messageId: string; text: string }
   | {
       kind: 'tool';
@@ -275,7 +275,9 @@ export const useChatStore = create<ChatState>((set) => ({
   endAssistant: (id) =>
     set((s) => ({
       messages: s.messages.map((m) =>
-        m.kind === 'assistant' && m.id === id ? { ...m, streaming: false } : m,
+        m.kind === 'assistant' && m.id === id
+          ? { ...m, streaming: false, endedAt: Date.now() }
+          : m,
       ),
     })),
 

@@ -31,7 +31,7 @@ export const GrepArgs = z.object({
 
 export const BashArgs = z.object({
   command: z.string().min(1),
-  timeoutMs: z.number().int().positive().max(120_000).optional(),
+  timeoutMs: z.number().int().positive().max(600_000).optional(),
 });
 
 export const ListDirArgs = z.object({

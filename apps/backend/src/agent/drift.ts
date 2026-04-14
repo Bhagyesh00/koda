@@ -44,7 +44,7 @@ export function jaccardSimilarity(a: string, b: string): number {
 export const DRIFT_THRESHOLD = 0.08;
 
 export function summarizeAction(toolName: string, args: unknown): string {
-  const a = args as Record<string, unknown>;
+  const a = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>;
   const parts: string[] = [toolName];
   if (typeof a.path === 'string') parts.push(a.path);
   if (typeof a.pattern === 'string') parts.push(a.pattern);
