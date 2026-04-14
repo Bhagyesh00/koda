@@ -15,6 +15,7 @@ import { customToolsRouter } from './routes/customTools.js';
 import { snapshotsRouter } from './routes/snapshots.js';
 import { peerReviewRouter } from './routes/peerReview.js';
 import { fsRouter } from './routes/fs.js';
+import { usageRouter } from './routes/usage.js';
 import { registerAllTools } from './tools/index.js';
 import { loadCustomTools } from './tools/customLoader.js';
 
@@ -46,6 +47,7 @@ export function createServer(): express.Express {
   app.use('/v1', requireAuth, snapshotsRouter);
   app.use('/v1', requireAuth, peerReviewRouter);
   app.use('/v1', requireAuth, fsRouter);
+  app.use('/v1', requireAuth, usageRouter);
 
   app.use(errorHandler);
 

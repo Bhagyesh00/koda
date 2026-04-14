@@ -169,6 +169,16 @@ sessionsRouter.post('/sessions/:id/compact', (req, res) => {
   res.json({ ok: true, messageCount: updated.messages.length });
 });
 
+const SkillBody = z.object({ skill: z.string().min(1).nullable() });
+
+sessionsRouter.patch('/sessions/:id/skill', (req, res) => {
+  const session = sessionStore.get(req.params.id ?? '');
+  if (!session) throw new NotFoundError('session');
+  const { skill } = SkillBody.parse(req.body ?? {});
+  sessionStore.setSkill(session.id, skill ?? undefined);
+  res.json({ ok: true, skill: skill ?? null });
+});
+
 const ModelBody = z.object({ model: z.string().min(1).nullable() });
 
 sessionsRouter.patch('/sessions/:id/model', (req, res) => {

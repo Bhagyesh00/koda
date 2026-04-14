@@ -1,11 +1,17 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Send, Square, ClipboardList, Hammer, Folder, FolderPlus, Zap, Paperclip, X } from 'lucide-react';
+import {
+  Send, Square, Folder, FolderPlus,
+  Zap, X, FileText, FolderOpen, Globe, Brain, BrainCircuit,
+  AtSign, ChevronRight, Hand, Check, ShieldAlert, ClipboardPen, Loader2,
+} from 'lucide-react';
 import { useChatStore } from '@/lib/store';
 import { cn } from '@/lib/cn';
-import type { SessionMode } from '@koda/shared';
-import { clearSessionMessages, compactSession, updateSessionModel } from '@/lib/api';
+import { clearSessionMessages, compactSession, updateSessionModel, updateSessionSkill } from '@/lib/api';
+import { SkillOrb } from './SkillOrb';
+
+// ── Constants ────────────────────────────────────────────────────────────────
 
 const SLASH_COMMANDS = [
   { cmd: '/clear', desc: 'Clear chat history for this session' },
@@ -13,30 +19,38 @@ const SLASH_COMMANDS = [
   { cmd: '/model', desc: 'Switch model, e.g. /model koda' },
 ] as const;
 
+// ── Types ────────────────────────────────────────────────────────────────────
+
 interface Props {
   sessionId?: string | null;
   onSend: (text: string) => void;
   onStop: () => void;
   streaming: boolean;
   disabled?: boolean;
-  /** Active session's working directory, or undefined if no session/cwd. */
   cwd?: string;
-  /** Open the folder picker. */
   onSelectFolder: () => void;
   onCommandFeedback?: (msg: string, ok: boolean) => void;
 }
 
-interface AttachedFile {
-  path: string;       // absolute path shown in chip
-  displayName: string; // basename shown in chip label
+interface AttachedItem {
+  type: 'file' | 'folder' | 'web';
+  path: string;
+  displayName: string;
 }
+
+interface FileEntry {
+  name: string;
+  relPath: string;
+  type: 'file' | 'directory';
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function basename(p: string): string {
   const parts = p.replace(/[\\/]+$/, '').split(/[\\/]/);
   return parts[parts.length - 1] ?? p;
 }
 
-/** Fetch a file's content through the Next.js proxy → backend. */
 async function fetchFileContent(absPath: string): Promise<string> {
   const res = await fetch(`/api/fs/read?path=${encodeURIComponent(absPath)}`);
   if (!res.ok) {
@@ -47,34 +61,106 @@ async function fetchFileContent(absPath: string): Promise<string> {
   return data.content ?? '';
 }
 
-export function Composer({ sessionId, onSend, onStop, streaming, disabled, cwd, onSelectFolder, onCommandFeedback }: Props) {
+// ── Component ────────────────────────────────────────────────────────────────
+
+export function Composer({
+  sessionId, onSend, onStop, streaming, disabled,
+  cwd, onSelectFolder, onCommandFeedback,
+}: Props) {
+  // ── State ──────────────────────────────────────────────────────────────────
   const [text, setText] = useState('');
-  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
-  const [attachInput, setAttachInput] = useState('');
-  const [attachOpen, setAttachOpen] = useState(false);
+  const [activeSkill, setActiveSkill] = useState<string | null>(null);
+  const [attached, setAttached] = useState<AttachedItem[]>([]);
+  const [thinking, setThinking] = useState(true);
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>('ask');
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashFilter, setSlashFilter] = useState('');
+
+  // @ mention state
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionFilter, setMentionFilter] = useState('');
+  const [allFiles, setAllFiles] = useState<FileEntry[]>([]);
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [selectedIdx, setSelectedIdx] = useState(0);
+
   const ref = useRef<HTMLTextAreaElement>(null);
-  const attachRef = useRef<HTMLInputElement>(null);
+  const mentionRef = useRef<HTMLDivElement>(null);
   const mode = useChatStore((s) => s.mode);
   const setMode = useChatStore((s) => s.setMode);
   const autoAccept = useChatStore((s) => s.autoAccept);
   const setAutoAccept = useChatStore((s) => s.setAutoAccept);
 
+  function handlePermissionChange(m: PermissionMode) {
+    setPermissionMode(m);
+    if (m === 'ask') { setAutoAccept(false); if (mode !== 'plan') setMode('build'); }
+    else if (m === 'accept-edits') { setAutoAccept(true); if (mode !== 'plan') setMode('build'); }
+    else if (m === 'plan') { setAutoAccept(false); setMode('plan'); }
+    else if (m === 'bypass') { setAutoAccept(true); if (mode !== 'plan') setMode('build'); }
+  }
+
   const filteredCmds = SLASH_COMMANDS.filter((c) =>
     c.cmd.startsWith(slashFilter || '/'),
   );
 
+  // Auto-resize textarea
   useEffect(() => {
     if (!ref.current) return;
     ref.current.style.height = 'auto';
     ref.current.style.height = Math.min(ref.current.scrollHeight, 200) + 'px';
   }, [text]);
 
-  // Focus the attach input when it opens
+  // Close mention on outside click
   useEffect(() => {
-    if (attachOpen) attachRef.current?.focus();
-  }, [attachOpen]);
+    if (!mentionOpen) return;
+    function handle(e: MouseEvent) {
+      if (mentionRef.current && !mentionRef.current.contains(e.target as Node)) {
+        closeMention();
+      }
+    }
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, [mentionOpen]);
+
+  // Load flat file list when @ is opened
+  async function loadFiles() {
+    if (!cwd || allFiles.length > 0) return; // cache
+    setFilesLoading(true);
+    try {
+      const res = await fetch(`/api/fs/files?path=${encodeURIComponent(cwd)}&maxFiles=1000`);
+      if (res.ok) {
+        const data = (await res.json()) as { files: FileEntry[] };
+        setAllFiles(data.files ?? []);
+      }
+    } catch { /* ignore */ }
+    setFilesLoading(false);
+  }
+
+  function closeMention() {
+    setMentionOpen(false);
+    setMentionFilter('');
+    setSelectedIdx(0);
+  }
+
+  function openMention() {
+    setMentionOpen(true);
+    setMentionFilter('');
+    setSelectedIdx(0);
+    void loadFiles();
+  }
+
+  function addAttachment(item: AttachedItem) {
+    setAttached((prev) =>
+      prev.some((a) => a.path === item.path && a.type === item.type) ? prev : [...prev, item],
+    );
+    closeMention();
+    ref.current?.focus();
+  }
+
+  function removeAttachment(path: string) {
+    setAttached((prev) => prev.filter((a) => a.path !== path));
+  }
+
+  // ── Slash commands ─────────────────────────────────────────────────────────
 
   async function handleSlashCommand(raw: string): Promise<boolean> {
     if (!sessionId) return false;
@@ -104,54 +190,71 @@ export function Composer({ sessionId, onSend, onStop, streaming, disabled, cwd, 
     return false;
   }
 
+  // ── Submit ─────────────────────────────────────────────────────────────────
+
   async function submit() {
     const trimmed = text.trim();
-    if ((!trimmed && attachedFiles.length === 0) || streaming || disabled) return;
+    if ((!trimmed && attached.length === 0) || streaming || disabled) return;
 
-    // Handle slash commands
-    if (trimmed.startsWith('/') && attachedFiles.length === 0) {
+    if (trimmed.startsWith('/') && attached.length === 0) {
       const handled = await handleSlashCommand(trimmed);
       if (handled) { setText(''); setSlashOpen(false); return; }
     }
 
-    let finalMessage = trimmed;
+    const parts: string[] = [];
 
-    // Inject attached file contents before the user's message
-    if (attachedFiles.length > 0) {
-      const sections: string[] = [];
-      for (const f of attachedFiles) {
-        try {
-          const content = await fetchFileContent(f.path);
-          sections.push(`<file path="${f.path}">\n\`\`\`\n${content}\n\`\`\`\n</file>`);
-        } catch {
-          sections.push(`<file path="${f.path}">[could not read file]</file>`);
-        }
-      }
-      finalMessage = sections.join('\n\n') + (trimmed ? `\n\n${trimmed}` : '');
+    // Inject thinking preference
+    if (!thinking) {
+      parts.push('<instruction>Do NOT use <think> tags. Respond directly without internal reasoning.</instruction>');
     }
 
-    onSend(finalMessage);
+    // Inject web search requests
+    const webItems = attached.filter((a) => a.type === 'web');
+    for (const w of webItems) {
+      parts.push(`<web_search query="${w.path}" />`);
+    }
+
+    // Inject file/folder references
+    const fileItems = attached.filter((a) => a.type === 'file');
+    for (const f of fileItems) {
+      try {
+        const content = await fetchFileContent(f.path);
+        parts.push(`<file path="${f.path}">\n\`\`\`\n${content}\n\`\`\`\n</file>`);
+      } catch {
+        parts.push(`<file path="${f.path}">[could not read file]</file>`);
+      }
+    }
+
+    const folderItems = attached.filter((a) => a.type === 'folder');
+    for (const d of folderItems) {
+      parts.push(`<folder path="${d.path}" />`);
+    }
+
+    if (trimmed) parts.push(trimmed);
+
+    onSend(parts.join('\n\n'));
     setText('');
-    setAttachedFiles([]);
+    setAttached([]);
     setSlashOpen(false);
   }
 
-  function handleAttachConfirm() {
-    const raw = attachInput.trim();
-    if (!raw) { setAttachOpen(false); return; }
-    // Resolve against cwd if relative
-    const absPath = raw.startsWith('/') || /^[A-Za-z]:[/\\]/.test(raw)
-      ? raw
-      : cwd ? `${cwd}/${raw}` : raw;
-    const file: AttachedFile = { path: absPath, displayName: basename(absPath) };
-    setAttachedFiles((prev) => prev.some((f) => f.path === absPath) ? prev : [...prev, file]);
-    setAttachInput('');
-    setAttachOpen(false);
-  }
+  // ── Filtered file list for @ mention ─────────────────────────────────────
+
+  const WEB_OPTION = { name: 'Web Search', relPath: '__web__', type: 'web' as const };
+  const mentionResults = (() => {
+    const q = mentionFilter.toLowerCase();
+    const filtered = q
+      ? allFiles.filter((f) => f.relPath.toLowerCase().includes(q) || f.name.toLowerCase().includes(q))
+      : allFiles;
+    const limited = filtered.slice(0, 30);
+    // Always append web search option at the end
+    return [...limited, WEB_OPTION] as Array<FileEntry | typeof WEB_OPTION>;
+  })();
+
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div className="relative border-t border-border bg-bg/40 px-6 py-4">
-      {/* Animated progress bar shown while the model is streaming */}
+    <div className="relative border-t border-border bg-bg/40 px-6 py-3">
       {streaming && (
         <div className="absolute left-0 right-0 top-0 h-[2px] overflow-hidden">
           <div className="koda-progress h-full w-full" />
@@ -160,44 +263,31 @@ export function Composer({ sessionId, onSend, onStop, streaming, disabled, cwd, 
 
       <div className="mx-auto max-w-3xl">
         <div className="koda-glass flex flex-col rounded-2xl p-2 shadow-glow shadow-accent-glow/20">
-          {/* Attached file chips */}
-          {attachedFiles.length > 0 && (
+          {/* Attached items */}
+          {attached.length > 0 && (
             <div className="mb-1.5 flex flex-wrap gap-1 px-1">
-              {attachedFiles.map((f) => (
+              {attached.map((a) => (
                 <span
-                  key={f.path}
-                  className="flex items-center gap-1 rounded-md bg-accent/15 px-2 py-0.5 text-[11px] text-accent"
+                  key={`${a.type}-${a.path}`}
+                  className={cn(
+                    'flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px]',
+                    a.type === 'file' && 'bg-sky-500/15 text-sky-400',
+                    a.type === 'folder' && 'bg-violet-500/15 text-violet-400',
+                    a.type === 'web' && 'bg-green-500/15 text-green-400',
+                  )}
                 >
-                  <Paperclip size={9} />
-                  <span className="max-w-[160px] truncate font-mono">{f.displayName}</span>
+                  {a.type === 'file' && <FileText size={9} />}
+                  {a.type === 'folder' && <FolderOpen size={9} />}
+                  {a.type === 'web' && <Globe size={9} />}
+                  <span className="max-w-[160px] truncate font-mono">{a.displayName}</span>
                   <button
-                    onClick={() => setAttachedFiles((prev) => prev.filter((x) => x.path !== f.path))}
+                    onClick={() => removeAttachment(a.path)}
                     className="ml-0.5 opacity-60 hover:opacity-100"
                   >
                     <X size={9} />
                   </button>
                 </span>
               ))}
-            </div>
-          )}
-
-          {/* Inline attach-file input */}
-          {attachOpen && (
-            <div className="mb-1.5 flex items-center gap-1.5 px-1">
-              <Paperclip size={11} className="shrink-0 text-accent" />
-              <input
-                ref={attachRef}
-                value={attachInput}
-                onChange={(e) => setAttachInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') { e.preventDefault(); handleAttachConfirm(); }
-                  if (e.key === 'Escape') { setAttachOpen(false); setAttachInput(''); }
-                }}
-                placeholder="File path (relative to cwd or absolute)…"
-                className="flex-1 bg-transparent text-[12px] text-fg outline-none placeholder:text-fg-subtle"
-              />
-              <button onClick={handleAttachConfirm} className="text-[10px] text-accent hover:text-accent-hover">Attach</button>
-              <button onClick={() => { setAttachOpen(false); setAttachInput(''); }} className="text-[10px] text-fg-subtle hover:text-fg">Cancel</button>
             </div>
           )}
 
@@ -217,15 +307,131 @@ export function Composer({ sessionId, onSend, onStop, streaming, disabled, cwd, 
             </div>
           )}
 
-          <div className="flex items-end gap-2">
-            <ModeToggle value={mode} onChange={setMode} disabled={streaming || disabled} />
+          {/* @ mention — flat file picker */}
+          {mentionOpen && (
+            <div
+              ref={mentionRef}
+              className="mb-1.5 animate-fadeInUp rounded-xl border border-white/5"
+              style={{
+                background: 'rgba(17, 19, 23, 0.92)',
+                backdropFilter: 'blur(16px)',
+                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.04)',
+              }}
+            >
+              {/* Search input */}
+              <div className="flex items-center gap-2 border-b border-white/[0.04] px-3 py-2">
+                <AtSign size={13} className="shrink-0 text-accent" />
+                <input
+                  autoFocus
+                  value={mentionFilter}
+                  onChange={(e) => { setMentionFilter(e.target.value); setSelectedIdx(0); }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') { closeMention(); return; }
+                    if (e.key === 'ArrowDown') { e.preventDefault(); setSelectedIdx((i) => Math.min(i + 1, mentionResults.length - 1)); }
+                    if (e.key === 'ArrowUp') { e.preventDefault(); setSelectedIdx((i) => Math.max(i - 1, 0)); }
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const item = mentionResults[selectedIdx];
+                      if (!item) return;
+                      if (item.relPath === '__web__') {
+                        // Use current filter as web search query
+                        if (mentionFilter.trim()) {
+                          addAttachment({ type: 'web', path: mentionFilter.trim(), displayName: mentionFilter.trim().slice(0, 40) });
+                        }
+                      } else {
+                        const fullPath = cwd ? `${cwd}/${item.relPath}`.replace(/\\/g, '/').replace(/\/$/, '') : item.relPath;
+                        addAttachment({
+                          type: item.type === 'directory' ? 'folder' : 'file',
+                          path: fullPath,
+                          displayName: item.relPath,
+                        });
+                      }
+                    }
+                  }}
+                  placeholder="Search files and folders..."
+                  className="flex-1 bg-transparent text-[13px] text-fg outline-none placeholder:text-fg-subtle"
+                />
+                {filesLoading && <Loader2 size={12} className="shrink-0 animate-spin text-fg-subtle" />}
+              </div>
 
+              {/* File list */}
+              <div className="max-h-[280px] overflow-y-auto py-1">
+                {mentionResults.map((item, i) => {
+                  const isSelected = i === selectedIdx;
+                  const isWeb = item.relPath === '__web__';
+                  const dirName = !isWeb && item.relPath.includes('/')
+                    ? item.relPath.slice(0, item.relPath.lastIndexOf('/') + 1)
+                    : undefined;
+
+                  return (
+                    <button
+                      key={item.relPath}
+                      onClick={() => {
+                        if (isWeb) {
+                          if (mentionFilter.trim()) {
+                            addAttachment({ type: 'web', path: mentionFilter.trim(), displayName: mentionFilter.trim().slice(0, 40) });
+                          }
+                        } else {
+                          const fullPath = cwd ? `${cwd}/${item.relPath}`.replace(/\\/g, '/').replace(/\/$/, '') : item.relPath;
+                          addAttachment({
+                            type: item.type === 'directory' ? 'folder' : 'file',
+                            path: fullPath,
+                            displayName: item.relPath,
+                          });
+                        }
+                      }}
+                      onMouseEnter={() => setSelectedIdx(i)}
+                      className={cn(
+                        'flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors',
+                        isSelected ? 'bg-accent/[0.08]' : 'hover:bg-white/[0.03]',
+                        isWeb && 'border-t border-white/[0.04] mt-0.5',
+                      )}
+                    >
+                      {isWeb ? (
+                        <Globe size={13} className="shrink-0 text-green-400" />
+                      ) : item.type === 'directory' ? (
+                        <FolderOpen size={13} className="shrink-0 text-violet-400" />
+                      ) : (
+                        <FileText size={13} className="shrink-0 text-sky-400" />
+                      )}
+                      <span className={cn(
+                        'flex-1 truncate text-[12px]',
+                        isSelected ? 'text-fg' : 'text-fg-muted',
+                      )}>
+                        {isWeb
+                          ? (mentionFilter.trim() ? `Search web: "${mentionFilter.trim()}"` : 'Web Search')
+                          : item.name}
+                      </span>
+                      {dirName && !isWeb && (
+                        <span className="shrink-0 truncate text-[10px] text-fg-subtle/60 font-mono max-w-[180px]">
+                          {dirName}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+                {!filesLoading && allFiles.length === 0 && (
+                  <div className="px-3 py-4 text-center text-[11px] text-fg-subtle">
+                    {cwd ? 'No files found in workspace' : 'Open a folder first'}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Main input row */}
+          <div className="flex items-end gap-1.5">
             <textarea
               ref={ref}
               value={text}
               onChange={(e) => {
                 const v = e.target.value;
                 setText(v);
+                // Detect @ trigger
+                if (v.endsWith('@') && !mentionOpen) {
+                  openMention();
+                }
+                // Slash commands
                 if (v.startsWith('/') && !v.includes(' ')) {
                   setSlashFilter(v);
                   setSlashOpen(true);
@@ -234,7 +440,7 @@ export function Composer({ sessionId, onSend, onStop, streaming, disabled, cwd, 
                 }
               }}
               onKeyDown={(e) => {
-                if (e.key === 'Escape') { setSlashOpen(false); return; }
+                if (e.key === 'Escape') { setSlashOpen(false); closeMention(); return; }
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
                   void submit();
@@ -244,34 +450,18 @@ export function Composer({ sessionId, onSend, onStop, streaming, disabled, cwd, 
                 disabled
                   ? 'Select or create a session…'
                   : mode === 'plan'
-                    ? 'Describe what you want planned…'
-                    : 'Ask Koda to do something…'
+                    ? 'Describe what you want planned… (@ to add context)'
+                    : 'Ask Koda anything… (@ to add files, / for commands)'
               }
               rows={1}
               disabled={disabled}
-              className="flex-1 resize-none bg-transparent px-2 py-1.5 text-[14px] text-fg outline-none placeholder:text-fg-subtle disabled:opacity-50"
+              className="flex-1 resize-none bg-transparent px-2 py-2 text-[14px] text-fg outline-none placeholder:text-fg-subtle disabled:opacity-50"
             />
-
-            {/* @ attach button */}
-            <button
-              type="button"
-              onClick={() => setAttachOpen((v) => !v)}
-              disabled={streaming || disabled}
-              title="Attach a file (@)"
-              className={cn(
-                'flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition disabled:opacity-40',
-                attachOpen || attachedFiles.length > 0
-                  ? 'bg-accent/20 text-accent'
-                  : 'text-fg-muted hover:bg-bg-hover hover:text-fg',
-              )}
-            >
-              <Paperclip size={14} />
-            </button>
 
             {streaming ? (
               <button
                 onClick={onStop}
-                className="flex h-9 w-9 items-center justify-center rounded-xl bg-bg-hover text-fg transition hover:bg-bg-subtle"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-bg-hover text-fg transition hover:bg-bg-subtle"
                 aria-label="Stop"
               >
                 <Square size={14} />
@@ -279,120 +469,206 @@ export function Composer({ sessionId, onSend, onStop, streaming, disabled, cwd, 
             ) : (
               <button
                 onClick={() => void submit()}
-                disabled={(!text.trim() && attachedFiles.length === 0) || disabled}
-                className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent text-white shadow-glow shadow-accent-glow transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
+                disabled={(!text.trim() && attached.length === 0) || disabled}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent text-white shadow-glow shadow-accent-glow transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
                 aria-label="Send"
               >
                 <Send size={14} />
               </button>
             )}
           </div>
-        </div>
 
-        <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-fg-subtle">
-          <button
-            type="button"
-            onClick={onSelectFolder}
-            disabled={streaming}
-            className={cn(
-              'flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 font-medium transition disabled:opacity-50',
-              cwd
-                ? 'border-border bg-bg-subtle/60 text-fg-muted hover:border-accent/40 hover:text-fg'
-                : 'border-accent/40 bg-accent/10 text-accent hover:border-accent hover:bg-accent/20',
-            )}
-            title={cwd ?? 'No folder selected — pick a working directory to start a session'}
-          >
-            {cwd ? <Folder size={11} /> : <FolderPlus size={11} />}
-            <span className="max-w-[180px] truncate">
-              {cwd ? basename(cwd) : 'Select folder'}
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setAutoAccept(!autoAccept)}
-            disabled={streaming}
-            title={autoAccept ? 'Auto-accept ON — all tool calls approved automatically' : 'Auto-accept OFF — risky tools need approval'}
-            className={cn(
-              'flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 font-medium transition disabled:opacity-50',
-              autoAccept
-                ? 'border-yellow-500/60 bg-yellow-500/15 text-yellow-400 hover:bg-yellow-500/25'
-                : 'border-border bg-bg-subtle/60 text-fg-muted hover:border-accent/40 hover:text-fg',
-            )}
-          >
-            <Zap size={11} />
-            <span>{autoAccept ? 'Auto' : 'Manual'}</span>
-          </button>
+          {/* Toolbar row */}
+          <div className="mt-1 flex items-center gap-1 border-t border-white/[0.04] px-1 pt-1.5">
+            {/* @ mention button */}
+            <ToolbarButton
+              icon={<AtSign size={13} />}
+              label="Add context"
+              active={mentionOpen || attached.length > 0}
+              activeColor="text-sky-400"
+              onClick={openMention}
+              disabled={streaming || disabled}
+            />
 
-          <span className="flex-1 truncate text-center">
-            {autoAccept
-              ? 'Auto-accept ON — all tools run without approval prompts'
-              : mode === 'plan'
-                ? 'Plan mode — read-only exploration. Koda will draft a plan for your approval.'
-                : 'Build mode — Koda can edit files and run commands. Risky actions need approval.'}
-          </span>
+            {/* Thinking toggle */}
+            <ToolbarButton
+              icon={thinking ? <Brain size={13} /> : <BrainCircuit size={13} />}
+              label={thinking ? 'Thinking' : 'No thinking'}
+              active={!thinking}
+              activeColor="text-accent-2"
+              onClick={() => setThinking((v) => !v)}
+              disabled={streaming || disabled}
+            />
+
+            <div className="mx-1 h-4 w-px bg-white/[0.06]" />
+
+            {/* Skill orb */}
+            <SkillOrb
+              activeSkill={activeSkill}
+              onSkillChange={async (slug) => {
+                if (sessionId) {
+                  try {
+                    await updateSessionSkill(sessionId, slug);
+                    setActiveSkill(slug);
+                  } catch { /* ignore */ }
+                }
+              }}
+            />
+
+            <div className="flex-1" />
+
+            {/* Permission mode (includes Plan/Build + approval level) */}
+            <PermissionSelector
+              mode={permissionMode}
+              onChange={handlePermissionChange}
+              disabled={streaming}
+            />
+
+            {/* Folder selector */}
+            <button
+              type="button"
+              onClick={onSelectFolder}
+              disabled={streaming}
+              className={cn(
+                'flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium transition disabled:opacity-50',
+                cwd
+                  ? 'text-fg-subtle hover:bg-white/[0.04] hover:text-fg'
+                  : 'bg-accent/10 text-accent hover:bg-accent/20',
+              )}
+              title={cwd ? `${cwd} — click to change` : 'Select working directory'}
+            >
+              {cwd ? <Folder size={11} /> : <FolderPlus size={11} />}
+              <span className="max-w-[120px] truncate">
+                {cwd ? basename(cwd) : 'Folder'}
+              </span>
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-interface ModeToggleProps {
-  value: SessionMode;
-  onChange: (m: SessionMode) => void;
+// ── Sub-components ───────────────────────────────────────────────────────────
+
+function ToolbarButton({
+  icon, label, active, activeColor, onClick, disabled,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  active?: boolean;
+  activeColor?: string;
+  onClick: () => void;
   disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={label}
+      className={cn(
+        'flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium transition disabled:opacity-40',
+        active
+          ? `bg-white/[0.06] ${activeColor ?? 'text-accent'}`
+          : 'text-fg-subtle hover:bg-white/[0.04] hover:text-fg-muted',
+      )}
+    >
+      {icon}
+      <span className="hidden sm:inline">{label}</span>
+    </button>
+  );
 }
 
-function ModeToggle({ value, onChange, disabled }: ModeToggleProps) {
+// ── Permission Mode ──────────────────────────────────────────────────────────
+
+type PermissionMode = 'ask' | 'accept-edits' | 'plan' | 'bypass';
+
+const PERMISSION_OPTIONS: Array<{
+  mode: PermissionMode;
+  icon: React.ReactNode;
+  label: string;
+  desc: string;
+  color: string;
+}> = [
+  { mode: 'ask', icon: <Hand size={14} />, label: 'Ask permissions', desc: 'Always ask before making changes', color: 'text-sky-400' },
+  { mode: 'accept-edits', icon: <Check size={14} />, label: 'Accept edits', desc: 'Automatically accept all file edits', color: 'text-green-400' },
+  { mode: 'plan', icon: <ClipboardPen size={14} />, label: 'Plan mode', desc: 'Create a plan before making changes', color: 'text-accent-2' },
+  { mode: 'bypass', icon: <ShieldAlert size={14} />, label: 'Bypass permissions', desc: 'Accepts all permissions', color: 'text-yellow-400' },
+];
+
+function PermissionSelector({
+  mode, onChange, disabled,
+}: {
+  mode: PermissionMode;
+  onChange: (m: PermissionMode) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handle(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, [open]);
+
+  const current = PERMISSION_OPTIONS.find((o) => o.mode === mode) ?? PERMISSION_OPTIONS[0]!;
+
   return (
-    <div
-      className={cn(
-        'flex items-center rounded-xl border border-border bg-bg-subtle/60 p-0.5',
-        disabled && 'pointer-events-none opacity-60',
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        disabled={disabled}
+        className={cn(
+          'flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-medium transition disabled:opacity-40',
+          `bg-white/[0.04] ${current.color}`,
+          'hover:bg-white/[0.06]',
+        )}
+        title={current.desc}
+      >
+        {current.icon}
+        <span className="hidden sm:inline">{current.label}</span>
+      </button>
+
+      {open && (
+        <div
+          className="absolute bottom-full right-0 mb-2 w-[260px] animate-fadeInUp rounded-xl border border-white/5 p-1.5"
+          style={{
+            background: 'rgba(17, 19, 23, 0.92)',
+            backdropFilter: 'blur(16px)',
+            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.04)',
+          }}
+        >
+          {PERMISSION_OPTIONS.map((opt) => {
+            const isActive = mode === opt.mode;
+            return (
+              <button
+                key={opt.mode}
+                onClick={() => { onChange(opt.mode); setOpen(false); }}
+                className={cn(
+                  'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition',
+                  isActive ? 'bg-white/[0.06]' : 'hover:bg-white/[0.03]',
+                )}
+              >
+                <div className={cn('shrink-0', opt.color)}>{opt.icon}</div>
+                <div className="flex-1 min-w-0">
+                  <div className={cn('text-[12px] font-medium', isActive ? 'text-fg' : 'text-fg-muted')}>
+                    {opt.label}
+                  </div>
+                  <div className="text-[10px] text-fg-subtle">{opt.desc}</div>
+                </div>
+                {isActive && <Check size={12} className="shrink-0 text-accent" />}
+              </button>
+            );
+          })}
+        </div>
       )}
-      role="tablist"
-      aria-label="Mode"
-    >
-      <ModeButton
-        active={value === 'plan'}
-        onClick={() => onChange('plan')}
-        icon={<ClipboardList size={12} />}
-        label="Plan"
-      />
-      <ModeButton
-        active={value === 'build'}
-        onClick={() => onChange('build')}
-        icon={<Hammer size={12} />}
-        label="Build"
-      />
     </div>
   );
 }
 
-function ModeButton({
-  active,
-  onClick,
-  icon,
-  label,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: React.ReactNode;
-  label: string;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      role="tab"
-      aria-selected={active}
-      className={cn(
-        'flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11.5px] font-medium transition',
-        active
-          ? 'bg-accent text-white shadow-sm'
-          : 'text-fg-muted hover:bg-bg-hover hover:text-fg',
-      )}
-    >
-      {icon}
-      {label}
-    </button>
-  );
-}

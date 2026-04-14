@@ -109,6 +109,8 @@ export const SessionSchema = z.object({
    * When set, overrides the server's OLLAMA_MODEL env var for all turns in this session.
    */
   model: z.string().optional(),
+  /** Active skill slug (persona). */
+  skill: z.string().optional(),
   /** Mental model graph nodes (Phase 30). */
   mentalModel: z.object({
     nodes: z.array(z.object({

@@ -22,6 +22,7 @@ import { MentalModelCanvas } from '@/components/MentalModelCanvas';
 import { PeerReviewModal } from '@/components/PeerReviewModal';
 import { FolderPicker } from '@/components/FolderPicker';
 import { MiniAgentPanel } from '@/components/MiniAgentPanel';
+import { TokenDashboard } from '@/components/TokenDashboard';
 import { useChatStore } from '@/lib/store';
 import { startChatStream, startWatchStream } from '@/lib/sseClient';
 import { getSession, listSessions, getPlan, createSession, updateSessionCwd } from '@/lib/api';
@@ -39,6 +40,7 @@ export default function Page() {
   const [peerReviewOpen, setPeerReviewOpen] = useState(false);
   const [miniAgentOpen, setMiniAgentOpen] = useState(false);
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
+  const [tokenDashboardOpen, setTokenDashboardOpen] = useState(false);
   // 'new' → create a fresh session; 'change-cwd' → update existing session's workdir
   const [folderPickerMode, setFolderPickerMode] = useState<'new' | 'change-cwd'>('new');
   const abortRef = useRef<AbortController | null>(null);
@@ -435,7 +437,9 @@ export default function Page() {
           onOpenPeerReview={() => setPeerReviewOpen(true)}
           onOpenMiniAgent={() => setMiniAgentOpen((v) => !v)}
           miniAgentOpen={miniAgentOpen}
+          onOpenTokenDashboard={() => setTokenDashboardOpen(true)}
         />
+        {tokenDashboardOpen && <TokenDashboard onClose={() => setTokenDashboardOpen(false)} />}
         <IntentBanner sessionId={sessionId} />
         <WorkspaceChangeBanner />
         <TodoPanel todos={todos} />

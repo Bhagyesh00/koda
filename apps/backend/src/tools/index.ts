@@ -81,6 +81,8 @@ import { gitStashTool } from './gitStash.js';
 import { gitCherryPickTool } from './gitCherryPick.js';
 // Project Management
 import { changelogTool } from './changelog.js';
+// Parallel Sub-Agents
+import { agentSpawnTool } from './agentSpawn.js';
 
 let registered = false;
 
@@ -169,6 +171,8 @@ export function registerAllTools(): void {
   registerTool(gitCherryPickTool);
   // Project Management
   registerTool(changelogTool);
+  // Parallel Sub-Agents
+  registerTool(agentSpawnTool);
 }
 
 /** Tools allowed in plan mode (read-only + plan_write). */

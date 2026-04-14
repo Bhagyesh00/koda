@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import { Shield, FlaskConical, BookOpen, Wrench, Camera, History, Network, Users, Brain, Eye, PenLine, Terminal, Bot, Download } from 'lucide-react';
 import { useChatStore } from '@/lib/store';
 import { getSession, exportSessionUrl } from '@/lib/api';
-import { ModePill } from './ModePill';
 import { CostMeter } from './CostMeter';
 import { cn } from '@/lib/cn';
 
@@ -17,10 +16,10 @@ interface Props {
   onOpenPeerReview: () => void;
   onOpenMiniAgent: () => void;
   miniAgentOpen?: boolean;
+  onOpenTokenDashboard?: () => void;
 }
 
-export function HeroHeader({ sessionId, onToggleGuardrails, onOpenCustomTools, onToggleSnapshots, onToggleRegret, onOpenPeerReview, onOpenMiniAgent, miniAgentOpen }: Props) {
-  const mode = useChatStore((s) => s.mode);
+export function HeroHeader({ sessionId, onToggleGuardrails, onOpenCustomTools, onToggleSnapshots, onToggleRegret, onOpenPeerReview, onOpenMiniAgent, miniAgentOpen, onOpenTokenDashboard }: Props) {
   const streaming = useChatStore((s) => s.streaming);
   const activity = useChatStore((s) => s.activity);
   const guardrailsOpen = useChatStore((s) => s.guardrailsOpen);
@@ -65,7 +64,7 @@ export function HeroHeader({ sessionId, onToggleGuardrails, onOpenCustomTools, o
         {streaming && <ActivityPill activity={activity} />}
       </div>
       <div className="flex items-center gap-1.5">
-        <CostMeter sessionId={sessionId} />
+        <CostMeter sessionId={sessionId} onOpenDashboard={onOpenTokenDashboard} />
 
         {/* Context Lens */}
         <button
@@ -197,10 +196,6 @@ export function HeroHeader({ sessionId, onToggleGuardrails, onOpenCustomTools, o
             <Download size={12} />
           </a>
         )}
-
-        <div className="ml-1">
-          <ModePill mode={mode} />
-        </div>
       </div>
     </header>
   );

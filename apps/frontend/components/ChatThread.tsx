@@ -20,7 +20,6 @@ interface Props {
 export function ChatThread({ onDecisionResolve, onReplay }: Props) {
   const messages = useChatStore((s) => s.messages);
   const error = useChatStore((s) => s.error);
-  const mode = useChatStore((s) => s.mode);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -38,17 +37,20 @@ export function ChatThread({ onDecisionResolve, onReplay }: Props) {
               Hey, I'm Koda.
             </h2>
             <p className="max-w-md text-[14px] leading-relaxed text-fg-muted">
-              Your private coding companion. I read your code, propose changes, run commands, and
-              keep everything on your machine.
+              Your private AI coding agent. I read your code, write changes, run commands,
+              and keep everything on your machine.
             </p>
-            <div className="mt-5 flex flex-wrap items-center justify-center gap-2 text-[11px] text-fg-subtle">
-              <Hint>Ask me to read a file</Hint>
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+              <Hint>Read a file</Hint>
+              <Hint>Fix a bug</Hint>
               <Hint>Plan a refactor</Hint>
-              <Hint>Run the tests</Hint>
+              <Hint>Run tests</Hint>
+              <Hint>Search the web</Hint>
             </div>
-            <p className="mt-6 text-[11px] text-fg-subtle">
-              Currently in <span className="text-accent">{mode === 'plan' ? 'Plan' : 'Build'}</span>{' '}
-              mode — switch from the composer below.
+            <p className="mt-5 text-[11px] text-fg-subtle/60">
+              Type <span className="font-mono text-fg-subtle">@</span> to attach files
+              {' · '}
+              <span className="font-mono text-fg-subtle">/</span> for commands
             </p>
           </div>
         )}

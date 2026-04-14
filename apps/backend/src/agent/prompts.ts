@@ -33,7 +33,7 @@ function renderToolDocs(filter: (name: string) => boolean): string {
     .join('\n');
 }
 
-export function buildSystemPrompt(workDir: string, claudeMd?: string, activePlan?: string): string {
+export function buildSystemPrompt(workDir: string, claudeMd?: string, activePlan?: string, skillPrompt?: string): string {
   const toolDocs = renderToolDocs((name) => !BUILD_MODE_EXCLUDED.has(name));
 
   const projectInstructions = claudeMd
@@ -44,7 +44,9 @@ export function buildSystemPrompt(workDir: string, claudeMd?: string, activePlan
     ? `\n\n## Active Implementation Plan\nThe user has reviewed and approved the following plan. Execute it step by step. Do not deviate from the plan unless you discover a concrete blocker.\n\n${activePlan}`
     : '';
 
-  return `You are Koda, an expert AI software engineer.${projectInstructions}${planSection} You are working directly inside a user's codebase and can read files, write code, run commands, and fix bugs. You have deep knowledge of TypeScript, JavaScript, Python, Go, Rust, and common frameworks.
+  const skillSection = skillPrompt ? `\n\n## Active Skill\n${skillPrompt}` : '';
+
+  return `You are Koda, an expert AI software engineer.${projectInstructions}${planSection}${skillSection} You are working directly inside a user's codebase and can read files, write code, run commands, and fix bugs. You have deep knowledge of TypeScript, JavaScript, Python, Go, Rust, and common frameworks.
 
 ## Working Directory
 ${workDir}
@@ -152,6 +154,22 @@ Always prefer local files first. Use web tools when local knowledge is insuffici
 - If a task is ambiguous, ask one focused clarifying question before proceeding.
 - If you find yourself stuck in a loop (same file edited 3+ times), stop and ask the user.
 
+## Thinking
+When facing complex decisions, debugging, or errors, use <think> tags to reason step by step:
+
+<think>
+Let me analyze this...
+1. The root cause is X
+2. Alternative approaches: A, B, C
+3. I'll try approach B because...
+</think>
+
+Use thinking for:
+- Diagnosing errors before retrying
+- Planning multi-step implementations
+- Evaluating trade-offs between approaches
+- Debugging unexpected behavior
+
 ## Available Tools
 ${toolDocs}`;
 }
@@ -190,4 +208,34 @@ One tool per message. Stop after the fence. Wait for the result.
 
 ## Available Tools (Plan Mode Only)
 ${toolDocs}`;
+}
+
+/**
+ * Build a structured error-resolution hint injected into messages when a tool fails.
+ * Guides the LLM to reason about the failure and try a different approach.
+ */
+export function buildErrorHint(
+  toolName: string,
+  args: unknown,
+  error: string,
+  attempt: number,
+): string {
+  const argsPreview = JSON.stringify(args, null, 2).slice(0, 500);
+  const errorPreview = error.slice(0, 1000);
+  const lastAttemptNote = attempt >= 3
+    ? '\nThis is your LAST attempt. If this fails, explain to the user what went wrong and what they can do manually.'
+    : '';
+
+  return `<error_resolution attempt="${attempt}/3">
+The tool "${toolName}" just failed.
+Args: ${argsPreview}
+Error: ${errorPreview}
+
+Think step by step in <think> tags:
+1. WHY did this fail? (wrong path? permission? syntax? missing dependency? platform issue?)
+2. What ALTERNATIVE approach would work? (different command, different tool, different args?)
+3. If this is a platform issue (Unix vs Windows), what is the equivalent command?
+
+IMPORTANT: Do NOT repeat the same command. Try a genuinely different approach.${lastAttemptNote}
+</error_resolution>`;
 }

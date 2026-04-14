@@ -66,6 +66,70 @@ fsRouter.get('/fs/list', (req, res) => {
   });
 });
 
+// ── Flat recursive file listing (for @ mentions) ─────────────────────────────
+
+const FilesQuery = z.object({
+  path: z.string().min(1),
+  maxFiles: z.coerce.number().int().positive().max(2000).optional().default(500),
+});
+
+const SKIP_DIRS = new Set([
+  'node_modules', '.git', '.next', '.cache', 'dist', 'build', 'out',
+  '__pycache__', '.venv', 'venv', '.tox', 'target', 'coverage',
+  '.koda', '.idea', '.vscode',
+]);
+
+fsRouter.get('/fs/files', (req, res) => {
+  const { path: rootPath, maxFiles } = FilesQuery.parse(req.query);
+
+  if (!path.isAbsolute(rootPath)) {
+    throw new ValidationError(`path must be absolute (got: ${rootPath})`);
+  }
+
+  let stat: fs.Stats;
+  try { stat = fs.statSync(rootPath); } catch {
+    res.status(404).json({ error: `path does not exist: ${rootPath}` });
+    return;
+  }
+  if (!stat.isDirectory()) {
+    res.status(400).json({ error: `path is not a directory: ${rootPath}` });
+    return;
+  }
+
+  const results: Array<{ name: string; relPath: string; type: 'file' | 'directory' }> = [];
+  const queue: string[] = [rootPath];
+
+  while (queue.length > 0 && results.length < maxFiles) {
+    const dir = queue.shift()!;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+
+    for (const entry of entries) {
+      if (results.length >= maxFiles) break;
+      if (entry.name.startsWith('.') && dir === rootPath && SKIP_DIRS.has(entry.name)) continue;
+      if (SKIP_DIRS.has(entry.name)) continue;
+
+      const fullPath = path.join(dir, entry.name);
+      const relPath = path.relative(rootPath, fullPath).replace(/\\/g, '/');
+
+      if (entry.isDirectory()) {
+        results.push({ name: entry.name, relPath: relPath + '/', type: 'directory' });
+        queue.push(fullPath);
+      } else if (entry.isFile()) {
+        results.push({ name: entry.name, relPath, type: 'file' });
+      }
+    }
+  }
+
+  // Sort: directories first, then files, alphabetical within each group
+  results.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+    return a.relPath.localeCompare(b.relPath);
+  });
+
+  res.json({ root: rootPath, files: results, truncated: results.length >= maxFiles });
+});
+
 const ReadQuery = z.object({
   /** Absolute path to the file to read. */
   path: z.string().min(1),

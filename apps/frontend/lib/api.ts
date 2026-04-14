@@ -282,6 +282,15 @@ export async function updateSessionModel(id: string, model: string | null): Prom
   if (!r.ok) throw new Error(`failed to update model (${r.status})`);
 }
 
+export async function updateSessionSkill(id: string, skill: string | null): Promise<void> {
+  const r = await fetch(`/api/sessions/${id}/skill`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ skill }),
+  });
+  if (!r.ok) throw new Error(`failed to update skill (${r.status})`);
+}
+
 export function exportSessionUrl(id: string): string {
   return `/api/sessions/${id}/export`;
 }

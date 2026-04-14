@@ -237,6 +237,14 @@ class SessionStore {
     this.persist(s);
   }
 
+  setSkill(id: string, skill: string | undefined): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    s.skill = skill;
+    s.updatedAt = Date.now();
+    this.persist(s);
+  }
+
   clearMessages(id: string): void {
     const s = this.sessions.get(id);
     if (!s) return;

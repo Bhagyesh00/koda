@@ -8,6 +8,8 @@ import type { SSEWriter } from '../../sse.js';
 export interface TurnState {
   pendingHypothesis: { id: string; verification: string } | null;
   pendingProof: { description: string; command: string } | null;
+  /** Tracks retry attempts per tool name for error auto-resolution. */
+  retryTracker: Map<string, number>;
 }
 
 /** Minimal tool descriptor needed by stage functions. */

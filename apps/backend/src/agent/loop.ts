@@ -8,11 +8,13 @@ import { approvalQueue } from '../approval/queue.js';
 import { logger } from '../logger.js';
 import { config } from '../config.js';
 import { streamOllamaChat, type OllamaMessage, type OllamaToolCall, type OllamaToolDef } from './ollama.js';
-import { buildSystemPrompt, buildPlanModePrompt } from './prompts.js';
+import { buildSystemPrompt, buildPlanModePrompt, buildErrorHint } from './prompts.js';
+import { getSkill } from '../skills/registry.js';
 import { parseAllToolCalls, extractThinkingBlocks, stripThinkingBlocks } from './parser.js';
 import { TOOL_DESCRIPTORS, type ApprovalDecision } from '@koda/shared';
 import { zodToJsonSchemaLite } from './zodSchema.js';
 import { auditLog } from '../audit/log.js';
+import { usageTracker } from '../usage/tracker.js';
 // ── Stage imports ─────────────────────────────────────────────────────────────
 import { recallMemory, persistMemory } from './stages/memory.js';
 import { runInterceptors } from './stages/interceptors.js';
@@ -137,9 +139,10 @@ export async function runTurn(opts: RunTurnOptions): Promise<void> {
     try { activePlan = fs.readFileSync(session.planPath, 'utf8'); } catch { /* plan may not exist */ }
   }
 
+  const activeSkill = session.skill ? getSkill(session.skill) : undefined;
   const systemPrompt = inPlanMode
     ? buildPlanModePrompt(workDir, claudeMd)
-    : buildSystemPrompt(workDir, claudeMd, activePlan);
+    : buildSystemPrompt(workDir, claudeMd, activePlan, activeSkill?.promptAddition);
   const isToolAllowed = (name: string): boolean =>
     inPlanMode ? PLAN_MODE_TOOLS.has(name) : name !== 'plan_write';
   const toolDefs = buildToolDefs(isToolAllowed);
@@ -154,7 +157,7 @@ export async function runTurn(opts: RunTurnOptions): Promise<void> {
   ];
 
   // Mutable turn-level state shared across all tool calls
-  const turnState: TurnState = { pendingHypothesis: null, pendingProof: null };
+  const turnState: TurnState = { pendingHypothesis: null, pendingProof: null, retryTracker: new Map() };
 
   // ── Main agentic loop ───────────────────────────────────────────────────────
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
@@ -214,6 +217,7 @@ export async function runTurn(opts: RunTurnOptions): Promise<void> {
     // Phase 28 — Cost tracking
     const turnTokens = estimateTokens(assistantText) + estimateTokens(userMessage);
     const sessionTokens = sessionStore.addTokens(sessionId, turnTokens);
+    usageTracker.record(sessionId, turnTokens, Date.now() - turnStartedAt);
     const freshForBudget = sessionStore.get(sessionId);
     sse.send({
       type: 'cost_update',
@@ -390,6 +394,17 @@ export async function runTurn(opts: RunTurnOptions): Promise<void> {
     if (signal?.aborted) {
       sse.send({ type: 'error', code: 'aborted', message: 'cancelled' });
       break;
+    }
+
+    // ── Error auto-resolution: inject thinking hint on failure ──────────────
+    if (!ok) {
+      const retryCount = (turnState.retryTracker.get(tool.name) ?? 0) + 1;
+      turnState.retryTracker.set(tool.name, retryCount);
+      if (retryCount <= 3) {
+        const hint = buildErrorHint(tool.name, finalArgs, output, retryCount);
+        messages.push({ role: 'system', content: hint });
+        sse.send({ type: 'activity_update', phase: 'thinking', detail: 'analyzing error...' });
+      }
     }
 
     auditLog({ sessionId, tool: tool.name, callId, ok, ts: Date.now() });

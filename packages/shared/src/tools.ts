@@ -512,6 +512,18 @@ export const ChangelogArgs = z.object({
 
 export type ChangelogArgs = z.infer<typeof ChangelogArgs>;
 
+// ── Parallel Sub-Agents ─────────────────────────────────────────────────────
+
+export const AgentSpawnArgs = z.object({
+  tasks: z.array(z.object({
+    description: z.string().min(1),
+    prompt: z.string().min(1),
+    skill: z.string().optional(),
+    maxIterations: z.number().int().positive().max(10).optional().default(5),
+  })).min(1).max(5),
+});
+export type AgentSpawnArgs = z.infer<typeof AgentSpawnArgs>;
+
 export interface ToolDescriptor {
   name: string;
   description: string;
@@ -738,6 +750,8 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   { name: 'git_cherry_pick', description: 'Cherry-pick a commit onto the current branch. Requires approval.', requiresApproval: true, schema: GitCherryPickArgs },
   // ── Project Management ────────────────────────────────────────────────────
   { name: 'changelog', description: 'Generate a changelog from git commit history between two refs.', requiresApproval: false, schema: ChangelogArgs },
+  // ── Parallel Sub-Agents ───────────────────────────────────────────────────
+  { name: 'agent_spawn', description: 'Spawn parallel sub-agents to work on independent tasks simultaneously. Each agent has its own thinking and read-only tool access.', requiresApproval: false, schema: AgentSpawnArgs },
 ];
 
 export const TOOL_NAMES = TOOL_DESCRIPTORS.map((t) => t.name);
