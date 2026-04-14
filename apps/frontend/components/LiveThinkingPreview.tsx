@@ -3,14 +3,19 @@
 import { Brain } from 'lucide-react';
 import { useChatStore } from '@/lib/store';
 
+interface Props {
+  /** Only render when liveThinking belongs to this message. */
+  messageId: string;
+}
+
 /**
- * Streams the in-progress <think> block content while the LLM is responding.
- * Hidden if there's no live thinking yet. Replaced by a frozen ThinkingBlock
- * once the message_end event arrives and the canonical thinking SSE fires.
+ * Streams the in-progress <think> block while the LLM is responding.
+ * Rendered directly above the streaming AssistantBubble in ChatThread so
+ * thinking always appears above the response, never below it.
  */
-export function LiveThinkingPreview() {
+export function LiveThinkingPreview({ messageId }: Props) {
   const live = useChatStore((s) => s.liveThinking);
-  if (!live || !live.text.trim()) return null;
+  if (!live || live.messageId !== messageId || !live.text.trim()) return null;
 
   return (
     <div className="mx-6 my-2 flex gap-3">

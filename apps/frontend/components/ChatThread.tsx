@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { Fragment, useEffect, useRef } from 'react';
 import { useChatStore } from '@/lib/store';
 import { stripThinkingBlocks } from '@/lib/thinkingParser';
 import { MessageBubble } from './MessageBubble';
@@ -21,14 +21,11 @@ export function ChatThread({ onDecisionResolve, onReplay }: Props) {
   const messages = useChatStore((s) => s.messages);
   const error = useChatStore((s) => s.error);
   const mode = useChatStore((s) => s.mode);
-  const liveThinking = useChatStore((s) => s.liveThinking);
   const ref = useRef<HTMLDivElement>(null);
 
-  // Scroll to bottom on new messages AND when live thinking starts streaming
-  // (liveThinking is a separate field, not part of messages, so needs its own dep).
   useEffect(() => {
     ref.current?.scrollTo({ top: ref.current.scrollHeight, behavior: 'smooth' });
-  }, [messages, liveThinking]);
+  }, [messages]);
 
   return (
     <div ref={ref} className="flex-1 overflow-y-auto">
@@ -72,25 +69,21 @@ export function ChatThread({ onDecisionResolve, onReplay }: Props) {
             );
           }
           if (m.kind === 'assistant') {
-            // Always strip <think> blocks — react-markdown silently removes
-            // unknown HTML tags, which leaves an empty bubble if the model
-            // emitted only thinking content. Thinking is rendered separately
-            // by the dedicated ThinkingBlock entry.
             const displayText = stripThinkingBlocks(m.text);
-            // Hide empty bubbles at all times — during streaming the
-            // InlineActivityHint covers the "agent is working" signal, so
-            // there is no need to flash an empty bubble. This also prevents
-            // the flicker where a bubble appears then vanishes when the model
-            // uses native tool calling and emits no prose text.
-            if (displayText.trim() === '') return null;
+            // During streaming, show LiveThinkingPreview above the bubble so
+            // thinking always appears before the response — never below it.
             return (
-              <MessageBubble
-                key={m.id}
-                role="assistant"
-                text={displayText}
-                streaming={m.streaming}
-                startedAt={m.startedAt}
-              />
+              <Fragment key={m.id}>
+                {m.streaming && <LiveThinkingPreview messageId={m.id} />}
+                {displayText.trim() !== '' && (
+                  <MessageBubble
+                    role="assistant"
+                    text={displayText}
+                    streaming={m.streaming}
+                    startedAt={m.startedAt}
+                  />
+                )}
+              </Fragment>
             );
           }
           return (
@@ -106,7 +99,6 @@ export function ChatThread({ onDecisionResolve, onReplay }: Props) {
             />
           );
         })}
-        <LiveThinkingPreview />
         <InlineActivityHint />
         {error && (
           <div className="mx-6 my-3 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-[13px] text-red-300">

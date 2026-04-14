@@ -219,6 +219,16 @@ export async function runTurn(opts: RunTurnOptions): Promise<void> {
       );
       nativeToolCalls = result.toolCalls;
     } catch (err) {
+      // AbortError = user clicked Stop or closed the tab — not a real failure.
+      const isAbort =
+        (err instanceof Error && err.name === 'AbortError') ||
+        signal?.aborted;
+      if (isAbort) {
+        logger.debug({ messageId }, 'ollama stream aborted by client');
+        sse.send({ type: 'error', code: 'aborted', message: 'cancelled' });
+        sse.send({ type: 'message_end', messageId });
+        break;
+      }
       logger.error({ err }, 'ollama stream failed');
       sse.send({
         type: 'error',
