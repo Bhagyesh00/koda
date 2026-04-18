@@ -37,9 +37,9 @@ def parse_args():
     )
     p.add_argument("--epochs", type=int, default=3, help="Number of training epochs")
     p.add_argument("--output", default=str(ROOT / "koda-lora"), help="Output directory for LoRA weights")
-    p.add_argument("--lora-rank", type=int, default=16, help="LoRA rank (r)")
-    p.add_argument("--batch-size", type=int, default=2, help="Per-device training batch size")
-    p.add_argument("--max-seq-len", type=int, default=8192, help="Maximum sequence length")
+    p.add_argument("--lora-rank", type=int, default=8, help="LoRA rank (r) — use 8 for 8GB VRAM")
+    p.add_argument("--batch-size", type=int, default=1, help="Per-device training batch size — use 1 for 8GB VRAM")
+    p.add_argument("--max-seq-len", type=int, default=4096, help="Maximum sequence length — use 4096 for 8GB VRAM")
     return p.parse_args()
 
 
@@ -118,7 +118,7 @@ def main():
         packing=True,  # Pack short sequences for efficiency
         args=TrainingArguments(
             per_device_train_batch_size=args.batch_size,
-            gradient_accumulation_steps=max(1, 8 // args.batch_size),
+            gradient_accumulation_steps=8,  # effective batch=8 even with batch_size=1
             num_train_epochs=args.epochs,
             learning_rate=2e-4,
             fp16=False,
@@ -128,8 +128,10 @@ def main():
             save_strategy="epoch",
             warmup_ratio=0.05,
             lr_scheduler_type="cosine",
-            report_to="none",  # disable wandb by default
+            report_to="none",
             seed=42,
+            dataloader_pin_memory=False,  # saves VRAM on T1000
+            optim="adamw_8bit",           # 8-bit optimizer — cuts optimizer VRAM in half
         ),
     )
     trainer.train()

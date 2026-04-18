@@ -31,20 +31,45 @@ interface TrainingExample {
   messages: Message[];
 }
 
+// Normalize system prompt: replace real workDir with /workspace and strip hostname
+// so the model doesn't memorise machine-specific paths between training and inference.
+function normalizeSystemPrompt(raw: string): string {
+  return raw
+    .replace(/^Hostname:.*$/m, 'Hostname: koda-host')
+    .replace(/^(All relative paths are resolved from this directory\.)$/m, '$1')
+    .replace(/(?<=## Working Directory\n)[^\n]+/, '/workspace');
+}
+
 function sessionToExamples(session: ReturnType<typeof sessionStore.get>): TrainingExample[] {
-  if (!session || session.messages.length < 4) return [];
+  if (!session || session.messages.length < 2) return [];
 
   const examples: TrainingExample[] = [];
-  const systemContent = buildSystemPrompt(session.cwd ?? '.');
+  const systemContent = normalizeSystemPrompt(buildSystemPrompt(session.cwd ?? '.'));
   const systemMsg: Message = { role: 'system', content: systemContent };
   const msgs = session.messages;
 
-  // Sliding window: capture context around each assistant tool-call message
+  // Stateless single-turn examples: first user → first assistant pair.
+  // These give the clearest system-prompt → behavior signal for small models.
+  const firstUser = msgs.find((m) => m.role === 'user');
+  const firstAssistant = msgs.find((m) => m.role === 'assistant');
+  if (firstUser && firstAssistant && firstAssistant.content.length >= 20) {
+    examples.push({
+      messages: [
+        systemMsg,
+        { role: firstUser.role, content: firstUser.content },
+        { role: firstAssistant.role, content: firstAssistant.content },
+      ],
+    });
+  }
+
+  if (msgs.length < 4) return examples;
+
+  // Sliding window: capture context around each assistant message (tool-call or plain text)
   for (let i = 2; i < msgs.length; i++) {
     const m = msgs[i];
     if (!m || m.role !== 'assistant') continue;
-    // Only include turns where the assistant actually called a tool
-    if (!m.content.includes('tool_call') && !m.content.includes('"name"')) continue;
+    // Include any assistant response of meaningful length (not just tool calls)
+    if (m.content.length < 20) continue;
 
     // Include up to 6 prior messages as context, plus this assistant message
     // and the next tool result (if any)
@@ -52,7 +77,6 @@ function sessionToExamples(session: ReturnType<typeof sessionStore.get>): Traini
     const windowEnd = Math.min(msgs.length - 1, i + 1);
     const window = msgs.slice(windowStart, windowEnd + 1);
 
-    // Skip windows that are too short to be meaningful
     if (window.length < 2) continue;
 
     examples.push({

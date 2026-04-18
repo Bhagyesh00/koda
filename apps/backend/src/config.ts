@@ -39,6 +39,26 @@ const ConfigSchema = z.object({
    * Get a free key at https://brave.com/search/api/
    */
   BRAVE_SEARCH_API_KEY: z.string().optional(),
+  /**
+   * Base URL for AUTOMATIC1111 Stable Diffusion WebUI (local image generation).
+   * Start A1111 with --api flag: python launch.py --api
+   * Default: http://localhost:7860
+   */
+  SD_BASE_URL: z.string().url().default('http://localhost:7860'),
+  /** Stable Diffusion model checkpoint name (must match name shown in A1111 UI) */
+  SD_MODEL: z.string().optional(),
+  /** Default image width in pixels */
+  SD_WIDTH: z.coerce.number().int().positive().default(512),
+  /** Default image height in pixels */
+  SD_HEIGHT: z.coerce.number().int().positive().default(512),
+  /** Number of diffusion steps — higher = better quality, slower */
+  SD_STEPS: z.coerce.number().int().positive().default(20),
+  /** Classifier-free guidance scale — how closely to follow the prompt */
+  SD_CFG_SCALE: z.coerce.number().positive().default(7),
+  /** Sampler algorithm */
+  SD_SAMPLER: z.string().default('DPM++ 2M Karras'),
+  /** Default negative prompt appended to every generation */
+  SD_NEGATIVE_PROMPT: z.string().default('blurry, bad quality, watermark, text, deformed'),
   CORS_ORIGIN: z.string().default('http://localhost:4000'),
 });
 
