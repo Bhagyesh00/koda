@@ -5,55 +5,87 @@ import type { Session, ChatMessage, SessionMode, Todo, GuardRule } from '@koda/s
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { clearShellCwd } from '../sandbox/shellState.js';
+import { getPool, query } from '../db/client.js';
 
 const SESSIONS_DIR = path.join(config.WORK_DIR_ABS, '.koda', 'sessions');
+
+function backfill(s: Session): Session {
+  if (!s.mode) s.mode = 'build';
+  if (!Array.isArray(s.messages)) s.messages = [];
+  if (!Array.isArray(s.todos)) s.todos = [];
+  if (!Array.isArray(s.guardrails)) s.guardrails = [];
+  if (!Array.isArray(s.contextReads)) s.contextReads = [];
+  if (!Array.isArray(s.hypotheses)) s.hypotheses = [];
+  if (!Array.isArray(s.snapshots)) s.snapshots = [];
+  if (typeof s.tokensUsed !== 'number') s.tokensUsed = 0;
+  if (!Array.isArray(s.editHistory)) s.editHistory = [];
+  if (!Array.isArray(s.proofs)) s.proofs = [];
+  if (!Array.isArray(s.constraints)) s.constraints = [];
+  if (!Array.isArray(s.checkpoints)) s.checkpoints = [];
+  if (!Array.isArray(s.rejections)) s.rejections = [];
+  if (!s.mentalModel) s.mentalModel = { nodes: [], edges: [] };
+  return s;
+}
 
 class SessionStore {
   private readonly sessions = new Map<string, Session>();
 
-  constructor() {
+  /** Must be called once at startup before the HTTP server begins accepting requests. */
+  async initialize(): Promise<void> {
+    if (getPool()) {
+      await this.loadFromPostgres();
+    } else {
+      this.loadFromFiles();
+    }
+  }
+
+  private async loadFromPostgres(): Promise<void> {
+    const result = await query<{ data: Session }>('SELECT data FROM sessions ORDER BY updated_at DESC');
+    for (const row of result.rows) {
+      const s = backfill(row.data);
+      this.sessions.set(s.id, s);
+    }
+    logger.info({ count: this.sessions.size }, 'sessions loaded from postgres');
+  }
+
+  private loadFromFiles(): void {
     fs.mkdirSync(SESSIONS_DIR, { recursive: true });
     for (const f of fs.readdirSync(SESSIONS_DIR)) {
       if (!f.endsWith('.json')) continue;
       try {
-        const raw = fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8');
-        const s = JSON.parse(raw) as Session;
-        // Backfill fields added after first persist
-        if (!s.mode) s.mode = 'build';
-        if (!Array.isArray(s.messages)) s.messages = [];
-        if (!Array.isArray(s.todos)) s.todos = [];
-        if (!Array.isArray(s.guardrails)) s.guardrails = [];
-        if (!Array.isArray(s.contextReads)) s.contextReads = [];
-        if (!Array.isArray(s.hypotheses)) s.hypotheses = [];
-        if (!Array.isArray(s.snapshots)) s.snapshots = [];
-        if (typeof s.tokensUsed !== 'number') s.tokensUsed = 0;
-        if (!Array.isArray(s.editHistory)) s.editHistory = [];
-        if (!s.mentalModel) s.mentalModel = { nodes: [], edges: [] };
+        const s = backfill(JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8')) as Session);
         this.sessions.set(s.id, s);
       } catch (err) {
         logger.warn({ err, file: f }, 'failed to load session');
       }
     }
-    logger.info({ count: this.sessions.size, dir: SESSIONS_DIR }, 'sessions loaded');
+    logger.info({ count: this.sessions.size, dir: SESSIONS_DIR }, 'sessions loaded from files');
   }
 
   private persist(s: Session): void {
-    const dest = path.join(SESSIONS_DIR, `${s.id}.json`);
-    const tmp = `${dest}.tmp`;
-    try {
-      // Write to a temp file then atomically rename so a crash mid-write
-      // never leaves a truncated/corrupt session file on disk.
-      fs.writeFileSync(tmp, JSON.stringify(s, null, 2));
-      fs.renameSync(tmp, dest);
-    } catch (err) {
-      logger.error({ err, sessionId: s.id }, 'failed to persist session');
-      try { fs.unlinkSync(tmp); } catch { /* temp file may not exist */ }
+    if (getPool()) {
+      query(
+        `INSERT INTO sessions (id, data, created_at, updated_at)
+         VALUES ($1, $2, to_timestamp($3 / 1000.0), to_timestamp($4 / 1000.0))
+         ON CONFLICT (id) DO UPDATE
+           SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
+        [s.id, JSON.stringify(s), s.createdAt, s.updatedAt],
+      ).catch((err) => logger.error({ err, sessionId: s.id }, 'failed to persist session to postgres'));
+    } else {
+      const dest = path.join(SESSIONS_DIR, `${s.id}.json`);
+      const tmp = `${dest}.tmp`;
+      try {
+        fs.writeFileSync(tmp, JSON.stringify(s, null, 2));
+        fs.renameSync(tmp, dest);
+      } catch (err) {
+        logger.error({ err, sessionId: s.id }, 'failed to persist session');
+        try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+      }
     }
   }
 
   create(opts: { title?: string; cwd?: string; parentId?: string; branchPoint?: number } = {}): Session {
     const now = Date.now();
-    // Default title to the folder basename so sessions are identifiable at a glance
     const defaultTitle = opts.cwd ? (path.basename(opts.cwd) || 'New chat') : 'New chat';
     const session: Session = {
       id: nanoid(10),
@@ -72,6 +104,10 @@ class SessionStore {
       branchPoint: opts.branchPoint,
       tokensUsed: 0,
       editHistory: [],
+      proofs: [],
+      constraints: [],
+      checkpoints: [],
+      rejections: [],
       mentalModel: { nodes: [], edges: [] },
     };
     this.sessions.set(session.id, session);
@@ -147,10 +183,7 @@ class SessionStore {
     if (!s) return;
     let changed = false;
     for (const f of files) {
-      if (!s.contextReads.includes(f)) {
-        s.contextReads.push(f);
-        changed = true;
-      }
+      if (!s.contextReads.includes(f)) { s.contextReads.push(f); changed = true; }
     }
     if (changed) this.persist(s);
   }
@@ -160,6 +193,67 @@ class SessionStore {
     if (!s) return;
     s.snapshots.push(snapshot);
     s.updatedAt = Date.now();
+    this.persist(s);
+  }
+
+  addProof(id: string, proof: Session['proofs'][number]): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    s.proofs.push(proof);
+    this.persist(s);
+  }
+
+  // ── Phase 31: constraint / checkpoint / rejection / perf / refactor-tx ──
+
+  addConstraint(id: string, c: Session['constraints'][number]): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    s.constraints = s.constraints ?? [];
+    s.constraints.push(c);
+    this.persist(s);
+  }
+
+  removeConstraint(id: string, constraintId: string): boolean {
+    const s = this.sessions.get(id);
+    if (!s || !s.constraints) return false;
+    const before = s.constraints.length;
+    s.constraints = s.constraints.filter((c) => c.id !== constraintId);
+    if (s.constraints.length === before) return false;
+    this.persist(s);
+    return true;
+  }
+
+  addCheckpoint(id: string, cp: Session['checkpoints'][number]): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    s.checkpoints = s.checkpoints ?? [];
+    s.checkpoints.push(cp);
+    if (s.checkpoints.length > 50) s.checkpoints = s.checkpoints.slice(-50);
+    this.persist(s);
+  }
+
+  addRejection(id: string, r: Session['rejections'][number]): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    s.rejections = s.rejections ?? [];
+    s.rejections.push(r);
+    if (s.rejections.length > 100) s.rejections = s.rejections.slice(-100);
+    this.persist(s);
+  }
+
+  setPerformanceBudget(id: string, budget: Session['performanceBudget']): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    if (budget == null) delete s.performanceBudget;
+    else s.performanceBudget = budget;
+    this.persist(s);
+  }
+
+  setRefactorTx(id: string, tx: Session['refactorTx']): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    if (tx == null) delete s.refactorTx;
+    else s.refactorTx = tx;
     this.persist(s);
   }
 
@@ -182,7 +276,6 @@ class SessionStore {
     this.persist(s);
   }
 
-  // ── Phase 28 — Cost tracking ───────────────────────────────────────────
   addTokens(id: string, tokens: number): number {
     const s = this.sessions.get(id);
     if (!s) return 0;
@@ -191,14 +284,17 @@ class SessionStore {
     return s.tokensUsed;
   }
 
-  setTokenBudget(id: string, budget: number | undefined): void {
+  setTokenBudget(id: string, budget: number | null | undefined): void {
     const s = this.sessions.get(id);
     if (!s) return;
-    s.tokenBudget = budget;
+    if (budget == null) {
+      delete s.tokenBudget;
+    } else {
+      s.tokenBudget = budget;
+    }
     this.persist(s);
   }
 
-  // ── Phase 23 — Intent Freeze ──────────────────────────────────────────
   setPinnedIntent(id: string, intent: string | undefined): void {
     const s = this.sessions.get(id);
     if (!s) return;
@@ -206,16 +302,12 @@ class SessionStore {
     this.persist(s);
   }
 
-  // ── Phase 26 — Regret Journal ─────────────────────────────────────────
   recordEdit(id: string, entry: { path: string; ts: number; contentHash: string }): void {
     const s = this.sessions.get(id);
     if (!s) return;
     s.editHistory = s.editHistory ?? [];
     s.editHistory.push({ ...entry, reverted: false });
-    // Keep last 200 edits
-    if (s.editHistory.length > 200) {
-      s.editHistory = s.editHistory.slice(-200);
-    }
+    if (s.editHistory.length > 200) s.editHistory = s.editHistory.slice(-200);
     this.persist(s);
   }
 
@@ -228,7 +320,6 @@ class SessionStore {
     this.persist(s);
   }
 
-  // ── Sprint 2 — Model switching / clear / compact ──────────────────────
   setModel(id: string, model: string | undefined): void {
     const s = this.sessions.get(id);
     if (!s) return;
@@ -253,18 +344,14 @@ class SessionStore {
     this.persist(s);
   }
 
-  /** Keep only the last `keepLast` messages to reduce context size. */
   compactMessages(id: string, keepLast = 20): void {
     const s = this.sessions.get(id);
     if (!s) return;
-    if (s.messages.length > keepLast) {
-      s.messages = s.messages.slice(-keepLast);
-    }
+    if (s.messages.length > keepLast) s.messages = s.messages.slice(-keepLast);
     s.updatedAt = Date.now();
     this.persist(s);
   }
 
-  // ── Phase 30 — Mental Model ────────────────────────────────────────────
   updateMentalModel(id: string, fn: (model: NonNullable<Session['mentalModel']>) => void): void {
     const s = this.sessions.get(id);
     if (!s) return;
@@ -277,10 +364,12 @@ class SessionStore {
     const existed = this.sessions.delete(id);
     if (existed) {
       clearShellCwd(id);
-      try {
-        fs.unlinkSync(path.join(SESSIONS_DIR, `${id}.json`));
-      } catch {
-        /* file may not exist yet */
+      if (getPool()) {
+        query('DELETE FROM sessions WHERE id = $1', [id]).catch((err) =>
+          logger.error({ err, id }, 'failed to delete session from postgres'),
+        );
+      } else {
+        try { fs.unlinkSync(path.join(SESSIONS_DIR, `${id}.json`)); } catch { /* ignore */ }
       }
     }
     return existed;

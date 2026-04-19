@@ -1,17 +1,10 @@
-/**
- * Cross-session semantic memory using keyword similarity (Jaccard).
- * Persists to `<WORK_DIR>/.koda/memory.json`. Indexes user → assistant
- * exchanges and retrieves top-K similar matches when a new user message
- * arrives.
- *
- * Not using embeddings to keep zero deps — Jaccard is fast, local, and
- * catches the obvious "I've seen this exact problem" case.
- */
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { jaccardSimilarity } from '../agent/drift.js';
+import { getPool, query } from '../db/client.js';
+import { embed } from './embeddings.js';
 
 interface MemoryEntry {
   id: string;
@@ -29,6 +22,12 @@ class MemoryStore {
   private entries: MemoryEntry[] = [];
 
   constructor() {
+    if (!getPool()) {
+      this.loadFromFile();
+    }
+  }
+
+  private loadFromFile(): void {
     try {
       if (fs.existsSync(MEMORY_FILE)) {
         const raw = JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8'));
@@ -39,10 +38,9 @@ class MemoryStore {
     }
   }
 
-  private persist(): void {
+  private persistToFile(): void {
     try {
       fs.mkdirSync(path.dirname(MEMORY_FILE), { recursive: true });
-      // Atomic write: tmp → rename so a crash mid-write never corrupts the file.
       const tmp = `${MEMORY_FILE}.tmp`;
       fs.writeFileSync(tmp, JSON.stringify(this.entries, null, 2));
       fs.renameSync(tmp, MEMORY_FILE);
@@ -53,40 +51,91 @@ class MemoryStore {
 
   remember(sessionId: string, userText: string, assistantText: string): void {
     if (!userText.trim() || !assistantText.trim()) return;
-    this.entries.push({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      sessionId,
-      userText,
-      assistantText,
-      ts: Date.now(),
-    });
-    if (this.entries.length > MAX_ENTRIES) {
-      this.entries = this.entries.slice(-MAX_ENTRIES);
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const ts = Date.now();
+
+    if (getPool()) {
+      // Async: embed + insert into pgvector
+      embed(userText).then((embedding) => {
+        const vec = embedding ? `[${embedding.join(',')}]` : null;
+        return query(
+          `INSERT INTO memory_entries (id, session_id, user_text, assistant_text, embedding, ts)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (id) DO NOTHING`,
+          [id, sessionId, userText, assistantText, vec, ts],
+        );
+      }).catch((err) => logger.error({ err }, 'failed to save memory entry'));
+    } else {
+      this.entries.push({ id, sessionId, userText, assistantText, ts });
+      if (this.entries.length > MAX_ENTRIES) this.entries = this.entries.slice(-MAX_ENTRIES);
+      this.persistToFile();
     }
-    this.persist();
   }
 
-  /**
-   * Recall top-K entries similar to the query, excluding entries from the
-   * current session (we want cross-session recall only).
-   */
-  recall(query: string, excludeSessionId: string, topK = 3): Array<{ sessionId: string; excerpt: string; score: number; ts: number }> {
-    const scored = this.entries
+  async recall(
+    queryText: string,
+    excludeSessionId: string,
+    topK = 3,
+  ): Promise<Array<{ sessionId: string; excerpt: string; score: number; ts: number }>> {
+    if (getPool()) {
+      return this.recallFromPostgres(queryText, excludeSessionId, topK);
+    }
+    return this.recallJaccard(queryText, excludeSessionId, topK);
+  }
+
+  private async recallFromPostgres(
+    queryText: string,
+    excludeSessionId: string,
+    topK: number,
+  ): Promise<Array<{ sessionId: string; excerpt: string; score: number; ts: number }>> {
+    const embedding = await embed(queryText);
+    if (!embedding) return this.recallJaccard(queryText, excludeSessionId, topK);
+
+    const vec = `[${embedding.join(',')}]`;
+    const result = await query<{
+      session_id: string;
+      user_text: string;
+      assistant_text: string;
+      ts: string;
+      score: number;
+    }>(
+      `SELECT session_id, user_text, assistant_text, ts,
+              1 - (embedding <=> $1::vector) AS score
+       FROM memory_entries
+       WHERE session_id != $2
+         AND embedding IS NOT NULL
+       ORDER BY embedding <=> $1::vector
+       LIMIT $3`,
+      [vec, excludeSessionId, topK],
+    );
+
+    return result.rows
+      .filter((r) => r.score >= RECALL_THRESHOLD)
+      .map((r) => ({
+        sessionId: r.session_id,
+        excerpt: `Q: ${r.user_text.slice(0, 100)}\nA: ${r.assistant_text.slice(0, 150)}`,
+        score: Number(r.score.toFixed(3)),
+        ts: Number(r.ts),
+      }));
+  }
+
+  private recallJaccard(
+    queryText: string,
+    excludeSessionId: string,
+    topK: number,
+  ): Array<{ sessionId: string; excerpt: string; score: number; ts: number }> {
+    return this.entries
       .filter((e) => e.sessionId !== excludeSessionId)
-      .map((e) => ({
-        entry: e,
-        score: jaccardSimilarity(query, e.userText),
-      }))
+      .map((e) => ({ entry: e, score: jaccardSimilarity(queryText, e.userText) }))
       .filter((s) => s.score >= RECALL_THRESHOLD)
       .sort((a, b) => b.score - a.score)
-      .slice(0, topK);
-
-    return scored.map((s) => ({
-      sessionId: s.entry.sessionId,
-      excerpt: `Q: ${s.entry.userText.slice(0, 100)}\nA: ${s.entry.assistantText.slice(0, 150)}`,
-      score: Number(s.score.toFixed(3)),
-      ts: s.entry.ts,
-    }));
+      .slice(0, topK)
+      .map((s) => ({
+        sessionId: s.entry.sessionId,
+        excerpt: `Q: ${s.entry.userText.slice(0, 100)}\nA: ${s.entry.assistantText.slice(0, 150)}`,
+        score: Number(s.score.toFixed(3)),
+        ts: s.entry.ts,
+      }));
   }
 
   list(): MemoryEntry[] {
@@ -94,13 +143,25 @@ class MemoryStore {
   }
 
   delete(id: string): void {
-    this.entries = this.entries.filter((e) => e.id !== id);
-    this.persist();
+    if (getPool()) {
+      query('DELETE FROM memory_entries WHERE id = $1', [id]).catch((err) =>
+        logger.error({ err }, 'failed to delete memory entry'),
+      );
+    } else {
+      this.entries = this.entries.filter((e) => e.id !== id);
+      this.persistToFile();
+    }
   }
 
   clear(): void {
-    this.entries = [];
-    this.persist();
+    if (getPool()) {
+      query('DELETE FROM memory_entries').catch((err) =>
+        logger.error({ err }, 'failed to clear memory entries'),
+      );
+    } else {
+      this.entries = [];
+      this.persistToFile();
+    }
   }
 }
 

@@ -1,84 +1,92 @@
 import type { Tool } from './registry.js';
 import { WebFetchArgs } from '@koda/shared';
+import { parse } from 'node-html-parser';
 import { logger } from '../logger.js';
-
-/** Strip HTML tags and decode common entities, returning readable plain text. */
-function htmlToText(html: string): string {
-  // Remove <script> and <style> blocks entirely (content is not useful)
-  let text = html.replace(/<script[\s\S]*?<\/script>/gi, '');
-  text = text.replace(/<style[\s\S]*?<\/style>/gi, '');
-  // Convert block-level tags to newlines so paragraphs are preserved
-  text = text.replace(/<\/?(p|div|section|article|header|footer|nav|main|aside|h[1-6]|li|tr|blockquote|pre|br)[^>]*>/gi, '\n');
-  // Remove all remaining tags
-  text = text.replace(/<[^>]+>/g, '');
-  // Decode the most common HTML entities
-  text = text
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&#x27;/g, "'")
-    .replace(/&#x2F;/g, '/');
-  // Collapse runs of spaces/tabs, but preserve intentional blank lines
-  text = text.replace(/[ \t]+/g, ' ');
-  text = text.replace(/\n[ \t]+/g, '\n');
-  text = text.replace(/\n{3,}/g, '\n\n');
-  return text.trim();
-}
 
 export const webFetchTool: Tool<WebFetchArgs> = {
   name: 'web_fetch',
-  description: 'Fetch a URL and return its content as plain text.',
+  description: 'Fetch a URL and return its content as plain text. Handles JS-rendered pages.',
   requiresApproval: false,
   schema: WebFetchArgs,
 
   async run(args) {
     const { url, maxLength = 8_000 } = args;
-
     logger.debug({ url }, 'web_fetch');
 
-    let res: Response;
+    // Fast path: plain fetch + HTML parse (no browser, no dependencies)
     try {
-      res = await fetch(url, {
+      const res = await fetch(url, {
         headers: {
-          // Identify as a browser to avoid bot-blocking on common docs sites
-          'User-Agent':
-            'Mozilla/5.0 (compatible; Koda/1.0; +https://github.com/koda)',
-          Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',
+          'User-Agent': 'Mozilla/5.0 (compatible; Koda/1.0; +https://github.com/koda)',
+          Accept: 'text/html,application/xhtml+xml,*/*',
         },
-        redirect: 'follow',
         signal: AbortSignal.timeout(15_000),
+        redirect: 'follow',
       });
-    } catch (err) {
-      return `Error fetching ${url}: ${err instanceof Error ? err.message : String(err)}`;
+
+      if (!res.ok) {
+        return `HTTP ${res.status} ${res.statusText} for ${url}`;
+      }
+
+      const contentType = res.headers.get('content-type') ?? '';
+
+      // Non-HTML: return raw text (JSON, plain text, etc.)
+      if (!contentType.includes('html')) {
+        const text = await res.text();
+        return truncate(text, maxLength);
+      }
+
+      const html = await res.text();
+      const root = parse(html);
+
+      // Remove noise
+      root.querySelectorAll('script,style,noscript,nav,footer,header,aside,[aria-hidden="true"]').forEach((el) => el.remove());
+
+      const text = root.querySelector('main,article,[role="main"]')?.innerText
+        ?? root.querySelector('body')?.innerText
+        ?? root.innerText;
+
+      const cleaned = text.replace(/\n{3,}/g, '\n\n').trim();
+
+      // If content looks like a JS SPA shell (< 200 chars of real text), fall through to Playwright
+      if (cleaned.length < 200) {
+        throw new Error('sparse-content');
+      }
+
+      return truncate(cleaned, maxLength);
+    } catch (fastErr) {
+      const isSparse = fastErr instanceof Error && fastErr.message === 'sparse-content';
+      if (!isSparse) {
+        logger.debug({ url, err: fastErr }, 'web_fetch fast path failed');
+      }
+
+      // Fallback: launch Playwright for JS-rendered pages
+      try {
+        const { chromium } = await import('playwright');
+        const browser = await chromium.launch({ headless: true });
+        try {
+          const page = await browser.newPage();
+          try {
+            await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
+          } catch {
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15_000 });
+          }
+          const text = await page.innerText('body');
+          return truncate(text.replace(/\n{3,}/g, '\n\n').trim(), maxLength);
+        } finally {
+          await browser.close();
+        }
+      } catch (pwErr) {
+        return `Error fetching ${url}: ${pwErr instanceof Error ? pwErr.message : String(pwErr)}`;
+      }
     }
-
-    if (!res.ok) {
-      return `HTTP ${res.status} ${res.statusText} for ${url}`;
-    }
-
-    const contentType = res.headers.get('content-type') ?? '';
-    let body: string;
-    try {
-      body = await res.text();
-    } catch (err) {
-      return `Error reading response body: ${err instanceof Error ? err.message : String(err)}`;
-    }
-
-    // Convert HTML to plain text; leave non-HTML responses (JSON, plain text) as-is
-    const isHtml = contentType.includes('html') || body.trimStart().startsWith('<!');
-    const text = isHtml ? htmlToText(body) : body;
-
-    if (text.length <= maxLength) return text;
-
-    // Return head + tail so both the top of the page and any trailing content
-    // (e.g. API signatures at the bottom of a doc page) are visible.
-    const head = Math.floor(maxLength * 0.7);
-    const tail = maxLength - head;
-    const dropped = text.length - maxLength;
-    return `${text.slice(0, head)}\n\n... [${dropped} characters omitted — increase maxLength to see more] ...\n\n${text.slice(-tail)}`;
   },
 };
+
+function truncate(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  const head = Math.floor(maxLength * 0.7);
+  const tail = maxLength - head;
+  const dropped = text.length - maxLength;
+  return `${text.slice(0, head)}\n\n... [${dropped} characters omitted — increase maxLength to see more] ...\n\n${text.slice(-tail)}`;
+}

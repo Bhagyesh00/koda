@@ -1,6 +1,16 @@
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 
+/** Returns the HTTP headers needed to call OLLAMA_BASE_URL, including Basic auth if configured. */
+export function ollamaHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (config.OLLAMA_USERNAME && config.OLLAMA_PASSWORD) {
+    const token = Buffer.from(`${config.OLLAMA_USERNAME}:${config.OLLAMA_PASSWORD}`).toString('base64');
+    headers['Authorization'] = `Basic ${token}`;
+  }
+  return headers;
+}
+
 export interface OllamaMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;

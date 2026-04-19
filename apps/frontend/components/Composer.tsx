@@ -5,6 +5,7 @@ import {
   Send, Square, Folder, FolderPlus,
   Zap, X, FileText, FolderOpen, Globe, Brain, BrainCircuit,
   AtSign, ChevronRight, Hand, Check, ShieldAlert, ClipboardPen, Loader2,
+  Mic, MicOff, Paperclip,
 } from 'lucide-react';
 import { useChatStore } from '@/lib/store';
 import { cn } from '@/lib/cn';
@@ -83,6 +84,12 @@ export function Composer({
   const [filesLoading, setFilesLoading] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(0);
 
+  const [recording, setRecording] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const speechRef = useRef<any>(null);
+
   const ref = useRef<HTMLTextAreaElement>(null);
   const mentionRef = useRef<HTMLDivElement>(null);
   const mode = useChatStore((s) => s.mode);
@@ -105,6 +112,65 @@ export function Composer({
     else if (m === 'accept-edits') { setAutoAccept(true); if (mode !== 'plan') setMode('build'); }
     else if (m === 'plan') { setAutoAccept(false); setMode('plan'); }
     else if (m === 'bypass') { setAutoAccept(true); if (mode !== 'plan') setMode('build'); }
+  }
+
+  // ── Voice input (Web Speech API) ──────────────────────────────────────────
+
+  function toggleVoice() {
+    if (typeof window === 'undefined') return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const SR = w.SpeechRecognition ?? w.webkitSpeechRecognition;
+    if (!SR) {
+      onCommandFeedback?.('Voice input requires Chrome or Edge', false);
+      return;
+    }
+    if (recording) {
+      speechRef.current?.stop();
+      setRecording(false);
+      return;
+    }
+    const sr = new SR();
+    sr.lang = 'en-US';
+    sr.continuous = false;
+    sr.interimResults = false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    sr.onresult = (e: any) => {
+      const transcript = (e.results[0]?.[0]?.transcript as string) ?? '';
+      setText((t) => (t ? `${t} ${transcript}` : transcript));
+    };
+    sr.onend = () => setRecording(false);
+    sr.onerror = () => { setRecording(false); onCommandFeedback?.('Voice recognition failed', false); };
+    sr.start();
+    speechRef.current = sr;
+    setRecording(true);
+  }
+
+  // ── File upload ────────────────────────────────────────────────────────────
+
+  async function handleFileUpload(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    try {
+      const form = new FormData();
+      for (const file of Array.from(files)) form.append('files', file);
+      const res = await fetch('/api/upload', { method: 'POST', body: form });
+      const data = (await res.json()) as { files?: Array<{ originalName: string; path: string; mimeType: string }> };
+      if (!res.ok) throw new Error((data as { error?: string }).error ?? 'Upload failed');
+      for (const f of data.files ?? []) {
+        // Images: inline as markdown; others: reference as path
+        if (f.mimeType.startsWith('image/')) {
+          addAttachment({ type: 'file', path: f.path, displayName: f.originalName });
+        } else {
+          addAttachment({ type: 'file', path: f.path, displayName: f.originalName });
+        }
+      }
+      onCommandFeedback?.(`${data.files?.length ?? 0} file(s) uploaded`, true);
+    } catch (err) {
+      onCommandFeedback?.(err instanceof Error ? err.message : 'Upload failed', false);
+    } finally {
+      setUploading(false);
+    }
   }
 
   const filteredCmds = SLASH_COMMANDS.filter((c) =>
@@ -482,6 +548,16 @@ export function Composer({
             )}
           </div>
 
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept=".txt,.md,.pdf,.png,.jpg,.jpeg,.gif,.webp,.svg,.json,.csv,.ts,.js,.py,.rs,.go,.java,.c,.cpp,.h,.yml,.yaml,.toml,.xml,.html,.css,.mp4,.webm,.mov"
+            className="hidden"
+            onChange={(e) => { void handleFileUpload(e.target.files); e.target.value = ''; }}
+          />
+
           {/* Toolbar row */}
           <div className="mt-1 flex items-center gap-1 border-t border-white/[0.04] px-1 pt-1.5">
             {/* @ mention button */}
@@ -491,6 +567,24 @@ export function Composer({
               active={mentionOpen || attached.length > 0}
               activeColor="text-sky-400"
               onClick={openMention}
+              disabled={streaming || disabled}
+            />
+
+            {/* File upload */}
+            <ToolbarButton
+              icon={uploading ? <Loader2 size={13} className="animate-spin" /> : <Paperclip size={13} />}
+              label="Upload file"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={streaming || disabled || uploading}
+            />
+
+            {/* Voice input */}
+            <ToolbarButton
+              icon={recording ? <MicOff size={13} /> : <Mic size={13} />}
+              label={recording ? 'Stop recording' : 'Voice input'}
+              active={recording}
+              activeColor="text-red-400"
+              onClick={toggleVoice}
               disabled={streaming || disabled}
             />
 

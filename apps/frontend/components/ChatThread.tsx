@@ -11,6 +11,7 @@ import { MemoryRecallCard } from './MemoryRecallCard';
 import { LiveThinkingPreview } from './LiveThinkingPreview';
 import { InlineActivityHint } from './ActivityStatus';
 import { Logo } from './Logo';
+import { TtsPlayer } from './TtsPlayer';
 
 interface Props {
   onDecisionResolve: (callId: string, optionIndex: number) => void;
@@ -78,13 +79,20 @@ export function ChatThread({ onDecisionResolve, onReplay }: Props) {
               <Fragment key={m.id}>
                 {m.streaming && <LiveThinkingPreview messageId={m.id} />}
                 {displayText.trim() !== '' && (
-                  <MessageBubble
-                    role="assistant"
-                    text={displayText}
-                    streaming={m.streaming}
-                    startedAt={m.startedAt}
-                    endedAt={m.endedAt}
-                  />
+                  <>
+                    <MessageBubble
+                      role="assistant"
+                      text={displayText}
+                      streaming={m.streaming}
+                      startedAt={m.startedAt}
+                      endedAt={m.endedAt}
+                    />
+                    {!m.streaming && displayText.trim().length > 0 && (
+                      <div className="ml-10 mt-0.5">
+                        <TtsPlayer text={displayText} />
+                      </div>
+                    )}
+                  </>
                 )}
               </Fragment>
             );

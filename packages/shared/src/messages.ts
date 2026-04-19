@@ -37,7 +37,7 @@ export const TodoSchema = z.object({
 });
 export type Todo = z.infer<typeof TodoSchema>;
 
-export const SessionModeSchema = z.enum(['plan', 'build']);
+export const SessionModeSchema = z.enum(['plan', 'build', 'expert']);
 export type SessionMode = z.infer<typeof SessionModeSchema>;
 
 export const GuardActionSchema = z.enum(['block', 'warn']);
@@ -111,6 +111,48 @@ export const SessionSchema = z.object({
   model: z.string().optional(),
   /** Active skill slug (persona). */
   skill: z.string().optional(),
+  /** Verifiable reasoning proofs — one per completed turn. */
+  proofs: z.array(z.object({
+    messageId: z.string(),
+    hash: z.string(),
+    signature: z.string(),
+    ts: z.number(),
+  })).default([]),
+  /** Persistent constraints injected into every system prompt (Phase 31). */
+  constraints: z.array(z.object({
+    id: z.string(),
+    type: z.enum(['functional', 'non-functional', 'security', 'architecture', 'domain', 'performance']),
+    text: z.string(),
+    createdAt: z.number(),
+  })).default([]),
+  /** Checkpoints — snapshots of agent state for long-running task resumption (Phase 31). */
+  checkpoints: z.array(z.object({
+    id: z.string(),
+    ts: z.number(),
+    messageIndex: z.number(),
+    summary: z.string(),
+    toolCallsSoFar: z.number(),
+  })).default([]),
+  /** User rejections — patterns the user has undone/rejected (Phase 31). */
+  rejections: z.array(z.object({
+    ts: z.number(),
+    context: z.string(),
+    rejected: z.string(),
+  })).default([]),
+  /** Performance budget for generated code (Phase 31). */
+  performanceBudget: z.object({
+    p99LatencyMs: z.number().optional(),
+    maxMemoryMb: z.number().optional(),
+    maxIoOpsPerRequest: z.number().optional(),
+  }).optional(),
+  /** Refactor transactions — multi-file edit tracking (Phase 31). */
+  refactorTx: z.object({
+    id: z.string(),
+    goal: z.string(),
+    filesPlanned: z.array(z.string()),
+    filesDone: z.array(z.string()),
+    startedAt: z.number(),
+  }).optional(),
   /** Mental model graph nodes (Phase 30). */
   mentalModel: z.object({
     nodes: z.array(z.object({

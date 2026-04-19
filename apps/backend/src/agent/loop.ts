@@ -16,12 +16,16 @@ import { zodToJsonSchemaLite } from './zodSchema.js';
 import { auditLog } from '../audit/log.js';
 import { usageTracker } from '../usage/tracker.js';
 // ── Stage imports ─────────────────────────────────────────────────────────────
-import { recallMemory, persistMemory } from './stages/memory.js';
+import { recallMemory, persistMemory, type RecallMatch } from './stages/memory.js';
+import { runSelfCorrection } from './stages/selfCorrect.js';
+import { emitReasoningProof } from './stages/reasoningProof.js';
+import { registerTurn, unregisterTurn } from './turnRegistry.js';
 import { runInterceptors } from './stages/interceptors.js';
 import { runDriftCheck, runGuardrailsCheck, emitToolRequest, computeAndEmitBlastRadius } from './stages/preApproval.js';
 import { runContextLens, runMentalModel, captureSemanticBefore } from './stages/preExecution.js';
 import { runTestResults, runProofVerify, runSemanticDiffCompare, runRegretJournal, runHypothesisVerify, verifyPendingHypothesisAtTurnEnd, emitTodoUpdate, emitPlanUpdate } from './stages/postExecution.js';
 import { type TurnState, type ToolCallCtx } from './stages/types.js';
+import { getLangfuse, createTrace } from '../telemetry/langfuse.js';
 
 const MAX_ITERATIONS = 25;
 // 10 minutes — generous enough for slow local models (koda can take 600 s+ per turn).
@@ -110,6 +114,25 @@ export async function runTurn(opts: RunTurnOptions): Promise<void> {
     return;
   }
 
+  // Create a turn-scoped AbortController so the session can be cancelled externally.
+  // Chain with any caller-supplied signal.
+  const turnAc = new AbortController();
+  if (signal) {
+    signal.addEventListener('abort', () => turnAc.abort(), { once: true });
+  }
+  registerTurn(sessionId, turnAc);
+
+  try {
+    await runTurnInner({ sessionId, userMessage, sse, signal: turnAc.signal, autoApproveAll, showThinking });
+  } finally {
+    unregisterTurn(sessionId);
+  }
+}
+
+async function runTurnInner(opts: RunTurnOptions): Promise<void> {
+  const { sessionId, userMessage, sse, signal, autoApproveAll = false, showThinking = true } = opts;
+  const session = sessionStore.get(sessionId)!;
+
   // Append user message to history
   sessionStore.appendMessage(sessionId, {
     id: nanoid(8),
@@ -118,9 +141,10 @@ export async function runTurn(opts: RunTurnOptions): Promise<void> {
     createdAt: Date.now(),
   });
 
-  // Phase 29 — memory recall
-  recallMemory(sessionId, userMessage, sse);
+  // Phase 29 — memory recall; also returns matches for LLM context injection
+  const memoryMatches: RecallMatch[] = await recallMemory(sessionId, userMessage, sse);
 
+  const trace = createTrace(sessionId, userMessage);
   const startedAt = Date.now();
   const inPlanMode = session.mode === 'plan';
   const workDir = session.cwd ?? config.WORK_DIR_ABS;
@@ -141,9 +165,54 @@ export async function runTurn(opts: RunTurnOptions): Promise<void> {
   }
 
   const activeSkill = session.skill ? getSkill(session.skill) : undefined;
-  const systemPrompt = inPlanMode
+  let systemPrompt = inPlanMode
     ? buildPlanModePrompt(workDir, claudeMd)
     : buildSystemPrompt(workDir, claudeMd, activePlan, activeSkill?.promptAddition);
+
+  // Inject relevant memories from past sessions into the system prompt (score > 0.25)
+  const relevantMemories = memoryMatches.filter((m) => m.score > 0.25);
+  if (relevantMemories.length > 0) {
+    const MAX_EXCERPT = 600;
+    const block = relevantMemories
+      .map((m) => m.excerpt.slice(0, MAX_EXCERPT))
+      .join('\n---\n');
+    systemPrompt += `\n\n## Relevant context from past sessions\n${block}`;
+  }
+
+  // Phase 31 — inject persistent constraints (functional, security, architecture, domain, etc.)
+  if (session.constraints && session.constraints.length > 0) {
+    const grouped = new Map<string, string[]>();
+    for (const c of session.constraints) {
+      const arr = grouped.get(c.type) ?? [];
+      arr.push(c.text);
+      grouped.set(c.type, arr);
+    }
+    const parts: string[] = [];
+    for (const [type, texts] of grouped) {
+      parts.push(`### ${type}\n${texts.map((t) => `- ${t}`).join('\n')}`);
+    }
+    systemPrompt += `\n\n## Constraints (MUST honour)\n${parts.join('\n\n')}`;
+  }
+
+  // Phase 31 — inject performance budget if set
+  if (session.performanceBudget) {
+    const b = session.performanceBudget;
+    const parts: string[] = [];
+    if (b.p99LatencyMs != null) parts.push(`p99 latency ≤ ${b.p99LatencyMs}ms`);
+    if (b.maxMemoryMb != null) parts.push(`max memory ≤ ${b.maxMemoryMb}MB`);
+    if (b.maxIoOpsPerRequest != null) parts.push(`I/O ops per request ≤ ${b.maxIoOpsPerRequest}`);
+    if (parts.length > 0) {
+      systemPrompt += `\n\n## Performance budget\n${parts.map((p) => `- ${p}`).join('\n')}`;
+    }
+  }
+
+  // Phase 31 — inject recent rejections so we don't repeat rejected approaches
+  if (session.rejections && session.rejections.length > 0) {
+    const recent = session.rejections.slice(-5);
+    const block = recent.map((r) => `- "${r.rejected}" (context: ${r.context})`).join('\n');
+    systemPrompt += `\n\n## User-rejected approaches (DO NOT repeat)\n${block}`;
+  }
+
   const isToolAllowed = (name: string): boolean =>
     inPlanMode ? PLAN_MODE_TOOLS.has(name) : name !== 'plan_write';
   const toolDefs = buildToolDefs(isToolAllowed);
@@ -163,7 +232,7 @@ export async function runTurn(opts: RunTurnOptions): Promise<void> {
   // ── Main agentic loop ───────────────────────────────────────────────────────
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
     if (signal?.aborted) {
-      sse.send({ type: 'error', code: 'aborted', message: 'cancelled' });
+      sse.send({ type: 'turn_cancelled', sessionId });
       break;
     }
     if (Date.now() - startedAt > WALL_CLOCK_MS) {
@@ -179,6 +248,11 @@ export async function runTurn(opts: RunTurnOptions): Promise<void> {
     let assistantText = '';
     let nativeToolCalls: OllamaToolCall[] = [];
     const turnStartedAt = Date.now();
+    const generation = trace?.generation({
+      name: 'ollama',
+      model: session.model ?? config.OLLAMA_MODEL,
+      input: messages.at(-1)?.content ?? '',
+    });
     try {
       const result = await streamOllamaChat(
         trimMessages(messages),
@@ -190,6 +264,7 @@ export async function runTurn(opts: RunTurnOptions): Promise<void> {
         { tools: toolDefs, model: session.model },
       );
       nativeToolCalls = result.toolCalls;
+      generation?.end({ output: assistantText });
     } catch (err) {
       const isAbort =
         (err instanceof Error && err.name === 'AbortError') || signal?.aborted;
@@ -325,8 +400,10 @@ export async function runTurn(opts: RunTurnOptions): Promise<void> {
     computeAndEmitBlastRadius(ctx);
 
     // ── Approval gate (stays inline: needs tool.schema for arg re-validation) ──
+    // Expert mode auto-approves everything — user has opted into reduced friction.
     let finalArgs: unknown = parsedArgs;
-    if (tool.requiresApproval && !autoApproveAll) {
+    const expertMode = session.mode === 'expert';
+    if (tool.requiresApproval && !autoApproveAll && !expertMode) {
       const abortPromise = signal
         ? new Promise<ApprovalDecision>((resolve) =>
           signal.addEventListener(
@@ -347,6 +424,12 @@ export async function runTurn(opts: RunTurnOptions): Promise<void> {
           content: msg,
           toolCallId: callId,
           createdAt: Date.now(),
+        });
+        // Phase 31 — record rejection so future turns don't repeat it
+        sessionStore.addRejection(sessionId, {
+          ts: Date.now(),
+          context: `${tool.name} call`,
+          rejected: typeof parsedArgs === 'string' ? parsedArgs : JSON.stringify(parsedArgs).slice(0, 300),
         });
         sse.send({ type: 'tool_result', callId, ok: false, output: msg });
         continue;
@@ -382,11 +465,14 @@ export async function runTurn(opts: RunTurnOptions): Promise<void> {
     // ── Tool execution ────────────────────────────────────────────────────────
     let output: string;
     let ok = true;
+    const toolSpan = trace?.span({ name: tool.name, input: JSON.stringify(finalArgs) });
     try {
       output = await tool.run(finalArgs, { sessionId, workDir, signal });
+      toolSpan?.end({ output: output.slice(0, 1_000) });
     } catch (err) {
       ok = false;
       output = `Error: ${err instanceof Error ? err.message : String(err)}`;
+      toolSpan?.end({ output, level: 'ERROR' });
       logger.error({ err, tool: tool.name }, 'tool execution failed');
     }
     ctx.output = output;
@@ -437,8 +523,28 @@ export async function runTurn(opts: RunTurnOptions): Promise<void> {
   // Verify any hypothesis that was never triggered inline (no bash call this turn)
   await verifyPendingHypothesisAtTurnEnd(sessionId, workDir, turnState, sse);
 
+  // Self-correction loop — one automatic critique pass on the final response.
+  // Skip in plan mode (model already reasoning carefully) and expert mode (user wants speed).
+  if (!inPlanMode && session.mode !== 'expert') {
+    const model = session.model ?? config.OLLAMA_MODEL;
+    const corrected = await runSelfCorrection(sessionId, messages, model, sse, signal);
+    if (corrected) {
+      const lastMsg = sessionStore.get(sessionId)?.messages.at(-1);
+      if (lastMsg?.role === 'assistant') lastMsg.content = corrected;
+    }
+  }
+
+  // Verifiable reasoning proof — HMAC-SHA256 over session+message+response
+  const finalMsg = sessionStore.get(sessionId)?.messages.at(-1);
+  if (finalMsg?.role === 'assistant' && finalMsg.content.trim()) {
+    emitReasoningProof(sessionId, finalMsg.id, userMessage, finalMsg.content, sse);
+  }
+
   // Phase 29 — persist turn to memory store
   persistMemory(sessionId, userMessage);
+
+  trace?.update({ output: sessionStore.get(sessionId)?.messages.at(-1)?.content ?? '' });
+  getLangfuse()?.flushAsync().catch(() => { /* non-critical */ });
 
   sse.send({ type: 'activity_update', phase: 'idle' });
   sse.send({ type: 'done' });

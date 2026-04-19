@@ -4,6 +4,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { sessionStore } from '../sessions/store.js';
 import { NotFoundError, ValidationError } from '../errors.js';
+import { cancelTurn, isTurnRunning } from '../agent/turnRegistry.js';
 
 export const sessionsRouter: Router = Router();
 
@@ -43,6 +44,13 @@ sessionsRouter.delete('/sessions/:id', (req, res) => {
   const ok = sessionStore.delete(req.params.id ?? '');
   if (!ok) throw new NotFoundError('session');
   res.status(204).end();
+});
+
+sessionsRouter.post('/sessions/:id/cancel', (req, res) => {
+  const id = req.params.id ?? '';
+  if (!sessionStore.get(id)) throw new NotFoundError('session');
+  const cancelled = cancelTurn(id);
+  res.json({ cancelled, running: isTurnRunning(id) });
 });
 
 const PatchSessionBody = z.object({ title: z.string().min(1).max(200) });
@@ -187,6 +195,40 @@ sessionsRouter.patch('/sessions/:id/model', (req, res) => {
   const { model } = ModelBody.parse(req.body ?? {});
   sessionStore.setModel(session.id, model ?? undefined);
   res.json({ ok: true, model: model ?? null });
+});
+
+sessionsRouter.get('/sessions/:id/proofs', (req, res) => {
+  const session = sessionStore.get(req.params.id ?? '');
+  if (!session) throw new NotFoundError('session');
+  res.json({ proofs: session.proofs ?? [] });
+});
+
+// ── Phase 31 ──────────────────────────────────────────────────────────────────
+
+sessionsRouter.get('/sessions/:id/constraints', (req, res) => {
+  const session = sessionStore.get(req.params.id ?? '');
+  if (!session) throw new NotFoundError('session');
+  res.json({ constraints: session.constraints ?? [] });
+});
+
+sessionsRouter.get('/sessions/:id/checkpoints', (req, res) => {
+  const session = sessionStore.get(req.params.id ?? '');
+  if (!session) throw new NotFoundError('session');
+  res.json({ checkpoints: session.checkpoints ?? [] });
+});
+
+const PerfBudgetBody = z.object({
+  p99LatencyMs: z.number().int().positive().optional(),
+  maxMemoryMb: z.number().int().positive().optional(),
+  maxIoOpsPerRequest: z.number().int().positive().optional(),
+}).nullable();
+
+sessionsRouter.put('/sessions/:id/performance-budget', (req, res) => {
+  const session = sessionStore.get(req.params.id ?? '');
+  if (!session) throw new NotFoundError('session');
+  const budget = PerfBudgetBody.parse(req.body ?? null);
+  sessionStore.setPerformanceBudget(session.id, budget ?? undefined);
+  res.json({ ok: true });
 });
 
 sessionsRouter.get('/sessions/:id/export', (req, res) => {

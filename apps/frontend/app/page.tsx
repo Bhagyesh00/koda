@@ -369,6 +369,10 @@ export default function Page() {
   function handleStop() {
     abortRef.current?.abort();
     setStreaming(false);
+    // Also signal the server to abort the running turn
+    if (sessionId) {
+      fetch(`/api/sessions/${sessionId}/cancel`, { method: 'POST' }).catch(() => {});
+    }
   }
 
   function handleDecisionResolve(callId: string, optionIndex: number) {

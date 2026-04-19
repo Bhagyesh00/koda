@@ -55,6 +55,7 @@ import { dynamodbTool } from './dynamodb.js';
 import { influxQueryTool } from './influxQuery.js';
 // DevOps / Infrastructure / Security tools
 import { webScrapeTool } from './webScrape.js';
+import { browserTool } from './browser.js';
 import { dockerTool } from './docker.js';
 import { k8sTool } from './k8s.js';
 import { httpRequestTool } from './httpRequest.js';
@@ -83,6 +84,26 @@ import { gitCherryPickTool } from './gitCherryPick.js';
 import { changelogTool } from './changelog.js';
 // Parallel Sub-Agents
 import { agentSpawnTool } from './agentSpawn.js';
+// NL→SQL
+import { nlToSqlTool } from './nlToSql.js';
+// Selenium prompt-based test
+import { seleniumTestTool } from './seleniumTest.js';
+import { seleniumSuiteTool } from './seleniumSuite.js';
+import { seleniumFromVideoTool } from './seleniumFromVideo.js';
+import { repoRefactorTool } from './repoRefactor.js';
+import { ttsSpeakTool } from './ttsSpeak.js';
+import { scene3dTool } from './scene3d.js';
+// Phase 31 — market-gap features
+import { constraintAddTool, constraintListTool, constraintRemoveTool } from './constraints.js';
+import { checkpointSaveTool, checkpointListTool } from './checkpoints.js';
+import { repoGraphTool } from './repoGraph.js';
+import { refactorTxTool } from './refactorTx.js';
+import { multiAgentTool } from './multiAgent.js';
+import { deployGateTool } from './deployGate.js';
+import { importVerifyTool } from './importVerify.js';
+import { edgeCaseTestsTool } from './edgeCaseTests.js';
+import { perfCheckTool } from './perfCheck.js';
+import { prReviewTool, diffSummarizeTool } from './prReview.js';
 
 let registered = false;
 
@@ -145,6 +166,7 @@ export function registerAllTools(): void {
   registerTool(influxQueryTool);
   // DevOps / Infrastructure / Security tools
   registerTool(webScrapeTool);
+  registerTool(browserTool);
   registerTool(dockerTool);
   registerTool(k8sTool);
   registerTool(httpRequestTool);
@@ -173,6 +195,33 @@ export function registerAllTools(): void {
   registerTool(changelogTool);
   // Parallel Sub-Agents
   registerTool(agentSpawnTool);
+  // NL→SQL
+  registerTool(nlToSqlTool);
+  // Selenium prompt-based test
+  registerTool(seleniumTestTool);
+  registerTool(seleniumSuiteTool);
+  registerTool(seleniumFromVideoTool);
+  // Repo refactor
+  registerTool(repoRefactorTool);
+  // TTS
+  registerTool(ttsSpeakTool);
+  // 3D scene understanding
+  registerTool(scene3dTool);
+  // Phase 31 — market-gap features
+  registerTool(constraintAddTool);
+  registerTool(constraintListTool);
+  registerTool(constraintRemoveTool);
+  registerTool(checkpointSaveTool);
+  registerTool(checkpointListTool);
+  registerTool(repoGraphTool);
+  registerTool(refactorTxTool);
+  registerTool(multiAgentTool);
+  registerTool(deployGateTool);
+  registerTool(importVerifyTool);
+  registerTool(edgeCaseTestsTool);
+  registerTool(perfCheckTool);
+  registerTool(prReviewTool);
+  registerTool(diffSummarizeTool);
 }
 
 /** Tools allowed in plan mode (read-only + plan_write). */

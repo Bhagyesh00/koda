@@ -1,0 +1,59 @@
+{
+  "name": "koda-assistant",
+  "displayName": "Koda AI Assistant",
+  "description": "AI coding assistant with run-debug-fix loop powered by Koda backend",
+  "version": "0.1.0",
+  "publisher": "koda",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "koda.openChat",
+        "title": "Koda: Open Chat"
+      },
+      {
+        "command": "koda.runAndFix",
+        "title": "Koda: Run & Auto-Fix"
+      }
+    ],
+    "configuration": {
+      "title": "Koda AI Assistant",
+      "properties": {
+        "koda.backendUrl": {
+          "type": "string",
+          "default": "http://localhost:4001",
+          "description": "Koda backend URL"
+        },
+        "koda.apiKey": {
+          "type": "string",
+          "default": "dev-secret-change-me",
+          "description": "Koda API key (Bearer token)"
+        },
+        "koda.testCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Test command to run (auto-detected if empty)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.39",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.9.3"
+  }
+}

@@ -39,6 +39,12 @@ const ConfigSchema = z.object({
    * Get a free key at https://brave.com/search/api/
    */
   BRAVE_SEARCH_API_KEY: z.string().optional(),
+  /** SearxNG base URL — set automatically in Docker Compose (http://searxng:8080) */
+  SEARXNG_URL: z.string().url().optional(),
+  /** Redis connection URL for tool output caching */
+  REDIS_URL: z.string().optional(),
+  /** JWT signing secret for multi-user auth */
+  JWT_SECRET: z.string().default('koda_jwt_secret_change_me_in_production'),
   /**
    * Base URL for AUTOMATIC1111 Stable Diffusion WebUI (local image generation).
    * Start A1111 with --api flag: python launch.py --api
@@ -59,7 +65,18 @@ const ConfigSchema = z.object({
   SD_SAMPLER: z.string().default('DPM++ 2M Karras'),
   /** Default negative prompt appended to every generation */
   SD_NEGATIVE_PROMPT: z.string().default('blurry, bad quality, watermark, text, deformed'),
+  /** OpenAI-compatible TTS endpoint. When set, enables the /v1/tts route and tts_speak tool. */
+  TTS_BASE_URL: z.string().url().optional(),
+  TTS_API_KEY: z.string().optional(),
+  TTS_MODEL: z.string().optional().default('tts-1'),
+  TTS_VOICE: z.string().optional().default('alloy'),
   CORS_ORIGIN: z.string().default('http://localhost:4000'),
+  /** PostgreSQL connection string. When set, sessions and memory use PostgreSQL instead of JSON files. */
+  DATABASE_URL: z.string().optional(),
+  /** Langfuse observability — get keys from your self-hosted Langfuse instance at /settings */
+  LANGFUSE_SECRET_KEY: z.string().optional(),
+  LANGFUSE_PUBLIC_KEY: z.string().optional(),
+  LANGFUSE_HOST: z.string().url().optional(),
 });
 
 const parsed = ConfigSchema.parse(process.env);

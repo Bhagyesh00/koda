@@ -39,6 +39,14 @@ install: ## Install all workspace deps via pnpm
 pull-model: ## Pull the configured Ollama model
 	$(OLLAMA) pull $(OLLAMA_MODEL)
 
+.PHONY: pull-embed-model
+pull-embed-model: ## Pull the nomic-embed-text embedding model (required for pgvector memory)
+	$(OLLAMA) pull nomic-embed-text
+
+.PHONY: pull-sqlcoder
+pull-sqlcoder: ## Pull the SQLCoder model (required for nl_to_sql tool)
+	$(OLLAMA) pull sqlcoder
+
 .PHONY: ollama-serve
 ollama-serve: ## Start the Ollama server in foreground
 	$(OLLAMA) serve
@@ -50,6 +58,23 @@ ollama-check: ## Check that Ollama is reachable
 .PHONY: list-models
 list-models: ## List installed Ollama models
 	$(OLLAMA) list
+
+# ---- docker ----
+.PHONY: docker-up
+docker-up: ## Start all services with Docker Compose
+	docker compose up -d
+
+.PHONY: docker-build
+docker-build: ## Build and start all services
+	docker compose up --build -d
+
+.PHONY: docker-down
+docker-down: ## Stop all Docker Compose services
+	docker compose down
+
+.PHONY: docker-logs
+docker-logs: ## Tail logs from all services
+	docker compose logs -f
 
 # ---- dev ----
 .PHONY: dev

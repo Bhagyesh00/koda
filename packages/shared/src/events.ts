@@ -46,6 +46,20 @@ export type ServerEvent =
       duration?: string;
       failures: Array<{ name: string; message: string }>;
     }
+  | { type: 'turn_cancelled'; sessionId: string }
+  // Self-correction loop
+  | { type: 'self_correction'; messageId: string; original: string; corrected: string }
+  // Verifiable reasoning proof
+  | { type: 'reasoning_proof'; messageId: string; hash: string; signature: string; ts: number }
+  // Phase 31 — market-gap features
+  | { type: 'constraint_added'; id: string; constraintType: string; text: string }
+  | { type: 'checkpoint_saved'; id: string; summary: string; messageIndex: number; ts: number }
+  | { type: 'rejection_recorded'; context: string; rejected: string; ts: number }
+  | { type: 'refactor_tx_update'; action: string; goal?: string; filesDone: number; filesPlanned: number }
+  | { type: 'deploy_gate_result'; passed: boolean; failures: Array<{ gate: string; message: string }> }
+  | { type: 'import_verify_result'; path: string; unresolved: string[] }
+  | { type: 'perf_check_result'; command: string; meanMs: number; p99Ms: number; budgetOk: boolean }
+  | { type: 'pr_review_result'; files: number; confidence: number; risks: string[] }
   | { type: 'done' };
 
 export type ApprovalDecision =

@@ -16,6 +16,11 @@ import { snapshotsRouter } from './routes/snapshots.js';
 import { peerReviewRouter } from './routes/peerReview.js';
 import { fsRouter } from './routes/fs.js';
 import { usageRouter } from './routes/usage.js';
+import { uploadRouter } from './routes/upload.js';
+import { webhookRouter } from './routes/webhook.js';
+import { schedulesRouter } from './routes/schedules.js';
+import { authRouter } from './routes/auth.js';
+import { ttsRouter } from './routes/tts.js';
 import { registerAllTools } from './tools/index.js';
 import { loadCustomTools } from './tools/customLoader.js';
 
@@ -36,6 +41,9 @@ export function createServer(): express.Express {
   // Public health
   app.use('/v1', healthRouter);
 
+  // Public auth routes (register/login must be before requireAuth middleware)
+  app.use('/v1', authRouter);
+
   // Authenticated API
   app.use('/v1', requireAuth, sessionsRouter);
   app.use('/v1', requireAuth, chatRouter);
@@ -48,6 +56,10 @@ export function createServer(): express.Express {
   app.use('/v1', requireAuth, peerReviewRouter);
   app.use('/v1', requireAuth, fsRouter);
   app.use('/v1', requireAuth, usageRouter);
+  app.use('/v1', requireAuth, uploadRouter);
+  app.use('/v1', requireAuth, webhookRouter);
+  app.use('/v1', requireAuth, schedulesRouter);
+  app.use('/v1', requireAuth, ttsRouter);
 
   app.use(errorHandler);
 

@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { EditFileArgs } from '@koda/shared';
 import type { Tool } from './registry.js';
 import { resolveInside } from '../sandbox/fs.js';
+import { runSecurityScan } from '../agent/stages/securityScan.js';
 
 export const editFileTool: Tool<EditFileArgs> = {
   name: 'edit_file',
@@ -25,6 +26,7 @@ export const editFileTool: Tool<EditFileArgs> = {
       ? original.split(args.oldString).join(args.newString)
       : original.replace(args.oldString, args.newString);
     await fs.writeFile(abs, updated, 'utf8');
-    return `Edited ${args.path}`;
+    const warning = runSecurityScan(args.path, updated);
+    return warning ? `Edited ${args.path}\n\n${warning}` : `Edited ${args.path}`;
   },
 };

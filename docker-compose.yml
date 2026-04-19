@@ -1,0 +1,119 @@
+services:
+  # ── App database (sessions, pgvector memory) ─────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: koda
+      POSTGRES_USER: koda
+      POSTGRES_PASSWORD: koda_secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - koda_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U koda -d koda"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Redis (caching / rate limiting) ──────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Langfuse (LLM observability, self-hosted) ─────────────────────────────
+  langfuse-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: langfuse
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse_secret
+    volumes:
+      - langfuse_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  langfuse:
+    image: langfuse/langfuse:latest
+    restart: unless-stopped
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+    ports:
+      - "3001:3000"
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse_secret@langfuse-db:5432/langfuse
+      NEXTAUTH_SECRET: langfuse_nextauth_secret_change_me
+      NEXTAUTH_URL: http://localhost:3001
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+
+  # ── SearxNG (self-hosted meta-search, no API key required) ───────────────
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    ports:
+      - "8888:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    environment:
+      SEARXNG_BASE_URL: http://localhost:8888
+      SEARXNG_SECRET: koda_searxng_secret_change_me
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Koda backend ─────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "4001:4001"
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://koda:koda_secret@postgres:5432/koda
+      REDIS_URL: redis://redis:6379
+      SEARXNG_URL: http://searxng:8080
+      CORS_ORIGIN: http://localhost:4000
+    volumes:
+      - koda_workspace:/app/workspace
+
+  # ── Koda frontend ─────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "4000:4000"
+    environment:
+      BACKEND_URL: http://backend:4001
+      BACKEND_AUTH_TOKEN: dev-secret-change-me
+
+volumes:
+  koda_pgdata:
+  langfuse_pgdata:
+  koda_workspace:

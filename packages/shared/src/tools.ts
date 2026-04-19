@@ -351,6 +351,124 @@ export const WebScrapeArgs = z.object({
 });
 export type WebScrapeArgs = z.infer<typeof WebScrapeArgs>;
 
+// ── NL→SQL ──────────────────────────────────────────────────────────────────
+
+export const NlToSqlArgs = z.object({
+  question: z.string().min(1),
+  schema: z.string().min(1),
+  dialect: z.enum(['postgresql', 'mysql', 'sqlite']).optional().default('postgresql'),
+});
+export type NlToSqlArgs = z.infer<typeof NlToSqlArgs>;
+
+// ── Selenium prompt-based test ───────────────────────────────────────────────
+
+const SeleniumCookie = z.object({
+  name: z.string().min(1),
+  value: z.string(),
+  domain: z.string().optional(),
+  path: z.string().optional(),
+});
+
+const SeleniumBasicAuth = z.object({
+  username: z.string().min(1),
+  password: z.string().min(1),
+});
+
+const SeleniumViewport = z.object({
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+});
+
+const SeleniumBrowser = z.enum(['chrome', 'firefox', 'edge']);
+
+const SeleniumVideoOptions = z.object({
+  enabled: z.boolean().optional().default(true),
+  fps: z.number().int().min(1).max(30).optional().default(5).describe('Frames per second (5 is a good balance — faster test, smaller file)'),
+  format: z.enum(['mp4', 'frames']).optional().default('mp4').describe('mp4 requires ffmpeg on PATH; frames keeps raw PNGs + HTML player'),
+});
+
+export const SeleniumTestArgs = z.object({
+  url: z.string().url(),
+  prompt: z.string().min(1).describe('Natural language description of the test scenario'),
+  browser: SeleniumBrowser.optional().default('chrome').describe('Which browser to drive'),
+  headless: z.boolean().optional().default(true).describe('Run browser in headless mode. Set false to watch live.'),
+  slowMoMs: z.number().int().nonnegative().max(5000).optional().default(0).describe('Delay between steps in ms — useful when watching live (e.g. 500)'),
+  recordVideo: z.union([z.boolean(), SeleniumVideoOptions]).optional().describe('Record a video of the test. Pass true for defaults, or an object {fps, format}'),
+  reportDir: z.string().optional().describe('Directory to save HTML report + screenshots'),
+  timeoutMs: z.number().int().positive().max(600_000).optional().default(60_000),
+  basicAuth: SeleniumBasicAuth.optional().describe('HTTP Basic Auth credentials applied before navigation'),
+  cookies: z.array(SeleniumCookie).optional().describe('Cookies to set before navigation'),
+  viewport: SeleniumViewport.optional().describe('Browser viewport size (default 1280x800)'),
+});
+export type SeleniumTestArgs = z.infer<typeof SeleniumTestArgs>;
+
+// ── Selenium suite (multi-scenario) ──────────────────────────────────────────
+
+export const SeleniumSuiteArgs = z.object({
+  browser: SeleniumBrowser.optional().default('chrome'),
+  headless: z.boolean().optional().default(true),
+  slowMoMs: z.number().int().nonnegative().max(5000).optional().default(0),
+  concurrency: z.number().int().min(1).max(8).optional().default(1).describe('Number of parallel browsers (each scenario runs in its own driver)'),
+  reportDir: z.string().optional(),
+  reportFormats: z.array(z.enum(['html', 'json', 'junit'])).optional().default(['html', 'json']),
+  timeoutMs: z.number().int().positive().max(600_000).optional().default(60_000),
+  setup: z.string().optional().describe('Prompt run before each scenario (e.g. "log in as admin")'),
+  teardown: z.string().optional().describe('Prompt run after each scenario'),
+  basicAuth: SeleniumBasicAuth.optional(),
+  cookies: z.array(SeleniumCookie).optional(),
+  viewport: SeleniumViewport.optional(),
+  recordVideo: z.union([z.boolean(), SeleniumVideoOptions]).optional(),
+  scenarios: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        url: z.string().url(),
+        prompt: z.string().min(1),
+        tags: z.array(z.string()).optional(),
+      }),
+    )
+    .min(1),
+  dataSet: z
+    .array(z.record(z.string()))
+    .optional()
+    .describe('Runs each scenario once per row; {{key}} in prompt is substituted with row[key]'),
+});
+export type SeleniumSuiteArgs = z.infer<typeof SeleniumSuiteArgs>;
+
+// ── Selenium from video (generate + run test from a screen recording) ────────
+
+export const SeleniumFromVideoArgs = z.object({
+  videoPath: z.string().optional().describe('Absolute path to mp4/webm/mov. Required unless framesDir is provided.'),
+  framesDir: z.string().optional().describe('Pre-extracted frames directory (PNG/JPG). Alternative to videoPath.'),
+  url: z.string().url().optional().describe('Starting URL. If omitted, extracted via OCR on the first frame.'),
+  visionModel: z.string().optional().describe('Ollama model with vision capability. Defaults to OLLAMA_MODEL.'),
+  frameSamples: z.number().int().min(2).max(30).optional().default(8),
+  browser: SeleniumBrowser.optional().default('chrome'),
+  headless: z.boolean().optional().default(true),
+  slowMoMs: z.number().int().nonnegative().max(5000).optional().default(0),
+  dryRun: z.boolean().optional().default(false).describe('Return the generated scenario without running it.'),
+  reportDir: z.string().optional(),
+  timeoutMs: z.number().int().positive().max(600_000).optional().default(60_000),
+  recordVideo: z.union([z.boolean(), SeleniumVideoOptions]).optional().describe('Also record a video of the replay for side-by-side comparison.'),
+}).refine(
+  (v) => !!(v.videoPath || v.framesDir),
+  { message: 'Either videoPath or framesDir is required' },
+);
+export type SeleniumFromVideoArgs = z.infer<typeof SeleniumFromVideoArgs>;
+
+// ── Browser automation ───────────────────────────────────────────────────────
+
+export const BrowserArgs = z.object({
+  url: z.string().url(),
+  action: z.enum(['get_text', 'get_html', 'screenshot', 'click', 'fill', 'evaluate']),
+  selector: z.string().optional(),
+  value: z.string().optional(),
+  script: z.string().optional(),
+  waitFor: z.string().optional(),
+  maxLength: z.number().int().positive().max(32_000).optional().default(8_000),
+});
+export type BrowserArgs = z.infer<typeof BrowserArgs>;
+
 // ── DevOps / Infrastructure ─────────────────────────────────────────────────
 
 export const DockerArgs = z.object({
@@ -514,6 +632,35 @@ export type ChangelogArgs = z.infer<typeof ChangelogArgs>;
 
 // ── Parallel Sub-Agents ─────────────────────────────────────────────────────
 
+// ── 3D scene understanding ────────────────────────────────────────────────────
+export const Scene3dArgs = z.object({
+  imagePath: z.string().optional().describe('Absolute or relative path to a local image file (PNG/JPG/WebP).'),
+  imageUrl: z.string().url().optional().describe('URL of an image to fetch and analyze.'),
+  detail: z.enum(['quick', 'detailed']).optional().default('detailed').describe('quick = broad spatial summary; detailed = full depth/occlusion/vanishing-point analysis.'),
+}).refine((v) => !!(v.imagePath || v.imageUrl), { message: 'Either imagePath or imageUrl is required' });
+export type Scene3dArgs = z.infer<typeof Scene3dArgs>;
+
+// ── Repo refactor orchestrator ───────────────────────────────────────────────
+export const RepoRefactorArgs = z.object({
+  goal: z.string().min(1).describe('Plain-language description of what to refactor'),
+  scope: z.string().optional().describe('Glob pattern or subdirectory to limit file search'),
+  generateTests: z.boolean().optional().default(true),
+  runTests: z.boolean().optional().default(true),
+  testCommand: z.string().optional().describe('Override test command (auto-detected if omitted)'),
+  maxFiles: z.number().int().min(1).max(50).optional().default(20),
+  dryRun: z.boolean().optional().default(false).describe('Show edit plan without applying changes'),
+  timeoutMs: z.number().int().positive().max(600_000).optional().default(120_000),
+});
+export type RepoRefactorArgs = z.infer<typeof RepoRefactorArgs>;
+
+// ── TTS ───────────────────────────────────────────────────────────────────────
+export const TtsSpeakArgs = z.object({
+  text: z.string().min(1).max(4096).describe('Text to convert to speech'),
+  voice: z.string().optional().describe('Voice name (e.g. alloy, echo, nova). Defaults to TTS_VOICE env.'),
+  outPath: z.string().optional().describe('Output file path relative to workDir. Defaults to .koda/tts/{timestamp}.mp3'),
+});
+export type TtsSpeakArgs = z.infer<typeof TtsSpeakArgs>;
+
 export const AgentSpawnArgs = z.object({
   tasks: z.array(z.object({
     description: z.string().min(1),
@@ -523,6 +670,97 @@ export const AgentSpawnArgs = z.object({
   })).min(1).max(5),
 });
 export type AgentSpawnArgs = z.infer<typeof AgentSpawnArgs>;
+
+// ── Phase 31: Market-gap tool schemas ────────────────────────────────────────
+
+export const ConstraintTypeSchema = z.enum(['functional', 'non-functional', 'security', 'architecture', 'domain', 'performance']);
+
+export const ConstraintAddArgs = z.object({
+  type: ConstraintTypeSchema.describe('Category of the constraint'),
+  text: z.string().min(1).max(1000).describe('The constraint text, e.g. "All routes must validate input with Zod" or "Never store secrets in plaintext"'),
+});
+export type ConstraintAddArgs = z.infer<typeof ConstraintAddArgs>;
+
+export const ConstraintListArgs = z.object({
+  type: ConstraintTypeSchema.optional().describe('Filter by category'),
+});
+export type ConstraintListArgs = z.infer<typeof ConstraintListArgs>;
+
+export const ConstraintRemoveArgs = z.object({
+  id: z.string().min(1).describe('Constraint id returned by constraint_add or constraint_list'),
+});
+export type ConstraintRemoveArgs = z.infer<typeof ConstraintRemoveArgs>;
+
+export const CheckpointSaveArgs = z.object({
+  summary: z.string().min(1).max(500).describe('Short description of what has been accomplished so far'),
+});
+export type CheckpointSaveArgs = z.infer<typeof CheckpointSaveArgs>;
+
+export const CheckpointListArgs = z.object({});
+export type CheckpointListArgs = z.infer<typeof CheckpointListArgs>;
+
+export const RepoGraphArgs = z.object({
+  roots: z.array(z.string().min(1)).min(1).max(10).describe('Absolute paths to repository roots to index'),
+  symbol: z.string().optional().describe('If set, return only references to this symbol across all repos'),
+  depth: z.number().int().min(1).max(5).default(2).optional(),
+});
+export type RepoGraphArgs = z.infer<typeof RepoGraphArgs>;
+
+export const RefactorTxArgs = z.object({
+  action: z.enum(['start', 'status', 'add_file', 'mark_done', 'commit', 'abort']),
+  goal: z.string().optional().describe('Plain-language goal (required for "start")'),
+  filesPlanned: z.array(z.string()).optional().describe('Files the refactor will touch (for "start")'),
+  file: z.string().optional().describe('File path (for "add_file" or "mark_done")'),
+});
+export type RefactorTxArgs = z.infer<typeof RefactorTxArgs>;
+
+export const MultiAgentArgs = z.object({
+  goal: z.string().min(1).describe('Overall goal the agents are coordinating on'),
+  agents: z.array(z.object({
+    role: z.string().min(1).describe('Role of the agent (e.g. "researcher", "implementer", "reviewer")'),
+    prompt: z.string().min(1),
+  })).min(2).max(5),
+  maxRounds: z.number().int().min(1).max(5).optional().default(3),
+});
+export type MultiAgentArgs = z.infer<typeof MultiAgentArgs>;
+
+export const DeployGateArgs = z.object({
+  testCommand: z.string().optional().describe('Test command (auto-detected if omitted)'),
+  skipSecurity: z.boolean().optional().default(false),
+  skipImports: z.boolean().optional().default(false),
+});
+export type DeployGateArgs = z.infer<typeof DeployGateArgs>;
+
+export const ImportVerifyArgs = z.object({
+  path: z.string().min(1).describe('File to validate imports for'),
+});
+export type ImportVerifyArgs = z.infer<typeof ImportVerifyArgs>;
+
+export const EdgeCaseTestsArgs = z.object({
+  targetFile: z.string().min(1).describe('Source file containing the function(s) to test'),
+  functionName: z.string().optional().describe('Specific function name (if omitted, all exported functions)'),
+  outPath: z.string().optional().describe('Where to write the test file (default: sibling .test.ts/.test.js)'),
+});
+export type EdgeCaseTestsArgs = z.infer<typeof EdgeCaseTestsArgs>;
+
+export const PerfCheckArgs = z.object({
+  command: z.string().min(1).describe('Command to benchmark (e.g. "node dist/index.js --bench")'),
+  iterations: z.number().int().min(1).max(100).optional().default(5),
+});
+export type PerfCheckArgs = z.infer<typeof PerfCheckArgs>;
+
+export const PrReviewArgs = z.object({
+  base: z.string().optional().default('HEAD~1').describe('Base ref (default HEAD~1)'),
+  head: z.string().optional().default('HEAD').describe('Head ref (default HEAD)'),
+});
+export type PrReviewArgs = z.infer<typeof PrReviewArgs>;
+
+export const DiffSummarizeArgs = z.object({
+  base: z.string().optional().default('HEAD~1'),
+  head: z.string().optional().default('HEAD'),
+  maxLines: z.number().int().min(10).max(2000).optional().default(400),
+});
+export type DiffSummarizeArgs = z.infer<typeof DiffSummarizeArgs>;
 
 export interface ToolDescriptor {
   name: string;
@@ -720,8 +958,15 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   { name: 'neo4j_query', description: 'Run a Cypher query against Neo4j via cypher-shell.', requiresApproval: false, schema: Neo4jQueryArgs },
   { name: 'dynamodb', description: 'Run DynamoDB operations (query, scan, get-item, put-item, etc) via AWS CLI.', requiresApproval: false, schema: DynamodbArgs },
   { name: 'influx_query', description: 'Run a Flux or InfluxQL query against InfluxDB.', requiresApproval: false, schema: InfluxQueryArgs },
+  // ── NL→SQL ───────────────────────────────────────────────────────────────
+  { name: 'nl_to_sql', description: 'Convert a natural language question to SQL using SQLCoder. Provide the database schema (DDL) and get back a ready-to-run SQL query.', requiresApproval: false, schema: NlToSqlArgs },
+  // ── Selenium prompt-based test ────────────────────────────────────────────
+  { name: 'selenium_test', description: 'Run a prompt-based browser test via Selenium. Describe the scenario in natural language — the tool plans 30+ actions (click/type/select/upload/hover/keys/frames/tabs/alerts/cookies/JS/assertions), runs them in Chrome/Firefox/Edge, self-heals failed steps, and produces an HTML report with screenshots per step.', requiresApproval: true, schema: SeleniumTestArgs },
+  { name: 'selenium_suite', description: 'Run multiple Selenium scenarios in one invocation with optional setup/teardown prompts, data-driven substitutions ({{var}}), parallel execution, and HTML/JSON/JUnit reports. Cross-browser (chrome/firefox/edge). Use for regression suites and CI-style batch runs.', requiresApproval: true, schema: SeleniumSuiteArgs },
+  { name: 'selenium_from_video', description: 'Generate and execute a Selenium test from a video recording of a user interaction. Extracts keyframes via ffmpeg, OCRs the address bar for the URL, uses a vision LLM to describe the user actions as a scenario, then runs that scenario with screenshots + optional replay video. Supports dryRun for preview-only.', requiresApproval: true, schema: SeleniumFromVideoArgs },
   // ── Web scraping ──────────────────────────────────────────────────────────
   { name: 'web_scrape', description: 'Scrape a URL and extract structured data — text, links, headings, or specific CSS selectors.', requiresApproval: false, schema: WebScrapeArgs },
+  { name: 'browser', description: 'Control a real Chromium browser — navigate JS-rendered pages, extract text/HTML, take screenshots, click elements, fill forms, or run JavaScript.', requiresApproval: true, schema: BrowserArgs },
   // ── DevOps / Infrastructure ───────────────────────────────────────────────
   { name: 'docker', description: 'Run Docker commands (ps, logs, inspect, stats, images, compose).', requiresApproval: false, schema: DockerArgs },
   { name: 'k8s', description: 'Run kubectl commands (get, describe, logs, top, config, apply, delete). Apply/delete require approval.', requiresApproval: false, schema: K8sArgs },
@@ -752,6 +997,27 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   { name: 'changelog', description: 'Generate a changelog from git commit history between two refs.', requiresApproval: false, schema: ChangelogArgs },
   // ── Parallel Sub-Agents ───────────────────────────────────────────────────
   { name: 'agent_spawn', description: 'Spawn parallel sub-agents to work on independent tasks simultaneously. Each agent has its own thinking and read-only tool access.', requiresApproval: false, schema: AgentSpawnArgs },
+  // ── 3D Scene Understanding ────────────────────────────────────────────────────
+  { name: 'scene_3d', description: 'Analyze the 3D spatial structure of an image using a vision LLM: depth layers, object relationships, vanishing points, occlusion, dominant planes.', requiresApproval: false, schema: Scene3dArgs },
+  // ── Repo Refactor ─────────────────────────────────────────────────────────────
+  { name: 'repo_refactor', description: 'Single-shot multi-file refactor: scans the codebase, generates an LLM edit plan, applies changes, optionally generates tests and runs them with auto-healing. Requires approval.', requiresApproval: true, schema: RepoRefactorArgs },
+  // ── TTS ──────────────────────────────────────────────────────────────────────
+  { name: 'tts_speak', description: 'Convert text to speech and save as an mp3 file. Requires TTS_BASE_URL to be configured.', requiresApproval: false, schema: TtsSpeakArgs },
+  // ── Phase 31: Market-gap features ────────────────────────────────────────────
+  { name: 'constraint_add', description: 'Add a persistent constraint to the session (functional, non-functional, security, architecture, domain, performance). Injected into every future system prompt.', requiresApproval: false, schema: ConstraintAddArgs },
+  { name: 'constraint_list', description: 'List all persistent constraints for the current session.', requiresApproval: false, schema: ConstraintListArgs },
+  { name: 'constraint_remove', description: 'Remove a persistent constraint by id.', requiresApproval: false, schema: ConstraintRemoveArgs },
+  { name: 'checkpoint_save', description: 'Save a checkpoint of the current agent state for long-running task resumption.', requiresApproval: false, schema: CheckpointSaveArgs },
+  { name: 'checkpoint_list', description: 'List all checkpoints for the current session.', requiresApproval: false, schema: CheckpointListArgs },
+  { name: 'repo_graph', description: 'Index multiple repositories and build a cross-repo dependency graph. Useful for understanding how changes in one repo affect callers in others.', requiresApproval: false, schema: RepoGraphArgs },
+  { name: 'refactor_tx', description: 'Start, update, status, or commit a multi-file refactor transaction. Tracks every file touched so no changes are lost across context boundaries.', requiresApproval: false, schema: RefactorTxArgs },
+  { name: 'multi_agent', description: 'Orchestrate parallel sub-agents with a shared blackboard. Agents can post findings and read each other\'s work. Requires approval.', requiresApproval: true, schema: MultiAgentArgs },
+  { name: 'deploy_gate', description: 'Run the full production safety gate: tests, lint, secret scan, dep audit, import validation. Blocks on any failure.', requiresApproval: false, schema: DeployGateArgs },
+  { name: 'import_verify', description: 'Validate every import statement in a file against the actual installed dependencies and local modules. Catches hallucinated imports.', requiresApproval: false, schema: ImportVerifyArgs },
+  { name: 'edge_case_tests', description: 'Generate edge-case and boundary-condition tests for a specific function or file using an LLM.', requiresApproval: false, schema: EdgeCaseTestsArgs },
+  { name: 'perf_check', description: 'Measure the performance characteristics (latency, I/O count, memory) of a command and compare against the session\'s performance budget.', requiresApproval: false, schema: PerfCheckArgs },
+  { name: 'pr_review', description: 'Review a git diff: summary + per-file confidence score + risk flags. Compresses large diffs into reviewable summaries.', requiresApproval: false, schema: PrReviewArgs },
+  { name: 'diff_summarize', description: 'Produce a short, structured summary of a git diff including change categories, impact analysis, and test coverage assessment.', requiresApproval: false, schema: DiffSummarizeArgs },
 ];
 
 export const TOOL_NAMES = TOOL_DESCRIPTORS.map((t) => t.name);

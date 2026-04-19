@@ -1,195 +1,184 @@
-import { WebScrapeArgs } from '@koda/shared';
 import type { Tool } from './registry.js';
-
-function shellEscape(s: string): string {
-  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-}
-
-/** Decode common HTML entities to plain text. */
-function decodeEntities(html: string): string {
-  return html
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'")
-    .replace(/&nbsp;/g, ' ');
-}
-
-/** Strip tags and return inner text. */
-function innerText(html: string): string {
-  return decodeEntities(html.replace(/<[^>]+>/g, '')).trim();
-}
-
-/**
- * Basic regex-based CSS selector extraction.
- * Supports: tag selectors, #id selectors, .class selectors.
- */
-function applySelector(html: string, selector: string): string[] {
-  let pattern: string;
-
-  if (selector.startsWith('#')) {
-    // ID selector: match elements with id="value"
-    const id = shellEscape(selector.slice(1));
-    pattern = `<[^>]+id\\s*=\\s*["']${id}["'][^>]*>[\\s\\S]*?<\\/[^>]+>`;
-  } else if (selector.startsWith('.')) {
-    // Class selector: match elements whose class attribute contains the value
-    const cls = shellEscape(selector.slice(1));
-    pattern = `<[^>]+class\\s*=\\s*["'][^"']*\\b${cls}\\b[^"']*["'][^>]*>[\\s\\S]*?<\\/[^>]+>`;
-  } else {
-    // Tag selector
-    const tag = shellEscape(selector);
-    pattern = `<${tag}[^>]*>[\\s\\S]*?<\\/${tag}>`;
-  }
-
-  const regex = new RegExp(pattern, 'gi');
-  const matches: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = regex.exec(html)) !== null) {
-    matches.push(m[0]);
-  }
-  return matches;
-}
-
-/** Extract specified HTML attributes from a chunk of HTML. */
-function extractAttrs(html: string, attributes: string[]): Record<string, string>[] {
-  const results: Record<string, string>[] = [];
-  const tagRegex = /<([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>/g;
-  let tag: RegExpExecArray | null;
-  while ((tag = tagRegex.exec(html)) !== null) {
-    const attrString = tag[2] ?? '';
-    const record: Record<string, string> = {};
-    let found = false;
-    for (const attr of attributes) {
-      const attrMatch = new RegExp(`${attr}\\s*=\\s*["']([^"']*)["']`, 'i').exec(attrString);
-      if (attrMatch) {
-        record[attr] = attrMatch[1] ?? '';
-        found = true;
-      }
-    }
-    if (found) results.push(record);
-  }
-  return results;
-}
+import { WebScrapeArgs } from '@koda/shared';
+import { parse } from 'node-html-parser';
+import { logger } from '../logger.js';
 
 export const webScrapeTool: Tool<typeof WebScrapeArgs._type> = {
   name: 'web_scrape',
-  description: 'Scrape a URL and extract structured data — text, links, headings, or specific CSS selectors.',
+  description: 'Scrape a URL and extract structured data — text, links, headings, or specific CSS selectors. Handles JS-rendered pages.',
   requiresApproval: false,
   schema: WebScrapeArgs,
 
-  async run(args, ctx) {
+  async run(args) {
     const { url, selector, extractAttributes, maxLength = 16_000 } = args;
+    logger.debug({ url, selector }, 'web_scrape');
 
-    let res: Response;
+    // Fast path: plain fetch + node-html-parser
     try {
-      res = await fetch(url, {
+      const res = await fetch(url, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; Koda/1.0; +https://github.com/koda)',
-          Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',
+          'User-Agent': 'Mozilla/5.0 (compatible; Koda/1.0)',
+          Accept: 'text/html,application/xhtml+xml,*/*',
         },
+        signal: AbortSignal.timeout(15_000),
         redirect: 'follow',
-        signal: ctx.signal,
       });
-    } catch (err) {
-      return `Error fetching ${url}: ${err instanceof Error ? err.message : String(err)}`;
-    }
 
-    if (!res.ok) {
-      return `HTTP ${res.status} ${res.statusText} for ${url}`;
-    }
+      if (!res.ok) return `HTTP ${res.status} ${res.statusText} for ${url}`;
 
-    let html: string;
-    try {
-      html = await res.text();
-    } catch (err) {
-      return `Error reading response body: ${err instanceof Error ? err.message : String(err)}`;
-    }
+      const html = await res.text();
+      const root = parse(html);
 
-    const parts: string[] = [];
+      const output = buildOutput(root, selector, extractAttributes);
 
-    // If a selector is provided, extract matching elements
-    if (selector) {
-      const matched = applySelector(html, selector);
-      if (matched.length === 0) {
-        parts.push(`No elements matched selector "${selector}".`);
-      } else {
-        parts.push(`## Selector: ${selector} (${matched.length} match${matched.length > 1 ? 'es' : ''})\n`);
-        if (extractAttributes && extractAttributes.length > 0) {
-          for (const chunk of matched) {
-            const attrs = extractAttrs(chunk, extractAttributes);
-            const text = innerText(chunk);
-            parts.push(`Text: ${text}`);
-            for (const record of attrs) {
-              for (const [k, v] of Object.entries(record)) {
-                parts.push(`  ${k}: ${v}`);
+      // If the page seems to be a JS SPA shell, fall back to Playwright
+      const bodyText = root.querySelector('body')?.innerText ?? '';
+      if (bodyText.trim().length < 200 && !selector) {
+        throw new Error('sparse-content');
+      }
+
+      return truncate(output, maxLength);
+    } catch (fastErr) {
+      const isSparse = fastErr instanceof Error && fastErr.message === 'sparse-content';
+      if (!isSparse) {
+        logger.debug({ url, err: fastErr }, 'web_scrape fast path failed, trying playwright');
+      }
+
+      // Fallback: Playwright for JS-rendered pages
+      try {
+        const { chromium } = await import('playwright');
+        const browser = await chromium.launch({ headless: true });
+        try {
+          const page = await browser.newPage();
+          try {
+            await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
+          } catch {
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15_000 });
+          }
+
+          const parts: string[] = [];
+
+          if (selector) {
+            const matches = await page.$$eval(
+              selector,
+              (els, attrs) =>
+                els.map((el) => {
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  const text = ((el as any).innerText?.trim() ?? el.textContent?.trim() ?? '') as string;
+                  const attrMap: Record<string, string> = {};
+                  if (attrs) {
+                    for (const attr of attrs) {
+                      const val = el.getAttribute(attr);
+                      if (val !== null) attrMap[attr] = val;
+                    }
+                  }
+                  return { text, attrs: attrMap };
+                }),
+              extractAttributes ?? null,
+            );
+
+            if (matches.length === 0) {
+              parts.push(`No elements matched selector "${selector}".`);
+            } else {
+              parts.push(`## Selector: ${selector} (${matches.length} match${matches.length > 1 ? 'es' : ''})\n`);
+              for (const m of matches) {
+                parts.push(m.text);
+                for (const [k, v] of Object.entries(m.attrs)) parts.push(`  ${k}: ${v}`);
+                parts.push('');
               }
             }
+          } else {
+            const title = await page.title();
+            if (title) parts.push(`Title: ${title}`);
+
+            const desc = await page.$eval('meta[name="description"]', (el) => el.getAttribute('content') ?? '').catch(() => '');
+            if (desc) parts.push(`Description: ${desc}`);
             parts.push('');
+
+            const headings = await page.$$eval('h1,h2,h3,h4,h5,h6', (els) =>
+              els.map((el) => ({ tag: el.tagName, text: // eslint-disable-next-line @typescript-eslint/no-explicit-any
+(el as any).innerText?.trim() ?? '' })),
+            );
+            if (headings.length > 0) {
+              parts.push(`## Headings (${headings.length})`);
+              parts.push(headings.map((h) => `[${h.tag}] ${h.text}`).join('\n'));
+              parts.push('');
+            }
+
+            const links = await page.$$eval('a[href]', (els) =>
+              els.map((el) => ({ text: // eslint-disable-next-line @typescript-eslint/no-explicit-any
+(el as any).innerText?.trim() ?? '', href: el.getAttribute('href') ?? '' })),
+            );
+            if (links.length > 0) {
+              parts.push(`## Links (${links.length})`);
+              parts.push(links.map((l) => `${l.text || '(no text)'} -> ${l.href}`).join('\n'));
+            }
           }
-        } else {
-          for (const chunk of matched) {
-            parts.push(innerText(chunk));
-          }
+
+          return truncate(parts.join('\n'), maxLength);
+        } finally {
+          await browser.close();
         }
-      }
-    } else {
-      // Default extraction: title, meta description, headings, links
-
-      // Title
-      const titleMatch = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
-      if (titleMatch) {
-        parts.push(`Title: ${innerText(titleMatch[1] ?? '')}`);
-      }
-
-      // Meta description
-      const metaMatch = /<meta\s+[^>]*name\s*=\s*["']description["'][^>]*content\s*=\s*["']([^"']*)["'][^>]*>/i.exec(html)
-        ?? /<meta\s+[^>]*content\s*=\s*["']([^"']*)["'][^>]*name\s*=\s*["']description["'][^>]*>/i.exec(html);
-      if (metaMatch) {
-        parts.push(`Description: ${decodeEntities(metaMatch[1] ?? '')}`);
-      }
-
-      parts.push('');
-
-      // Headings
-      const headingRegex = /<(h[1-6])[^>]*>([\s\S]*?)<\/\1>/gi;
-      const headings: string[] = [];
-      let hMatch: RegExpExecArray | null;
-      while ((hMatch = headingRegex.exec(html)) !== null) {
-        const level = (hMatch[1] ?? 'h?').toUpperCase();
-        headings.push(`[${level}] ${innerText(hMatch[2] ?? '')}`);
-      }
-      if (headings.length > 0) {
-        parts.push(`## Headings (${headings.length})`);
-        parts.push(headings.join('\n'));
-        parts.push('');
-      }
-
-      // Links
-      const linkRegex = /<a\s+[^>]*href\s*=\s*["']([^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
-      const links: string[] = [];
-      let lMatch: RegExpExecArray | null;
-      while ((lMatch = linkRegex.exec(html)) !== null) {
-        const href = decodeEntities(lMatch[1] ?? '');
-        const text = innerText(lMatch[2] ?? '');
-        if (text || href) {
-          links.push(`${text || '(no text)'} -> ${href}`);
-        }
-      }
-      if (links.length > 0) {
-        parts.push(`## Links (${links.length})`);
-        parts.push(links.join('\n'));
+      } catch (pwErr) {
+        return `Error scraping ${url}: ${pwErr instanceof Error ? pwErr.message : String(pwErr)}`;
       }
     }
-
-    let output = parts.join('\n');
-
-    // Truncate to maxLength
-    if (output.length > maxLength) {
-      output = output.slice(0, maxLength) + `\n... [truncated at ${maxLength} chars]`;
-    }
-
-    return output;
   },
 };
+
+function buildOutput(
+  root: ReturnType<typeof parse>,
+  selector?: string,
+  extractAttributes?: string[],
+): string {
+  const parts: string[] = [];
+
+  if (selector) {
+    const matches = root.querySelectorAll(selector);
+    if (matches.length === 0) {
+      return `No elements matched selector "${selector}".`;
+    }
+    parts.push(`## Selector: ${selector} (${matches.length} match${matches.length > 1 ? 'es' : ''})\n`);
+    for (const el of matches) {
+      parts.push(el.innerText.trim());
+      if (extractAttributes) {
+        for (const attr of extractAttributes) {
+          const val = el.getAttribute(attr);
+          if (val !== null) parts.push(`  ${attr}: ${val}`);
+        }
+      }
+      parts.push('');
+    }
+  } else {
+    const title = root.querySelector('title')?.innerText?.trim();
+    if (title) parts.push(`Title: ${title}`);
+
+    const desc = root.querySelector('meta[name="description"]')?.getAttribute('content');
+    if (desc) parts.push(`Description: ${desc}`);
+    parts.push('');
+
+    const headings = root.querySelectorAll('h1,h2,h3,h4,h5,h6');
+    if (headings.length > 0) {
+      parts.push(`## Headings (${headings.length})`);
+      parts.push(headings.map((h) => `[${h.tagName}] ${h.innerText.trim()}`).join('\n'));
+      parts.push('');
+    }
+
+    const links = root.querySelectorAll('a[href]');
+    if (links.length > 0) {
+      parts.push(`## Links (${Math.min(links.length, 50)})`);
+      parts.push(
+        links.slice(0, 50)
+          .map((l) => `${l.innerText.trim() || '(no text)'} -> ${l.getAttribute('href') ?? ''}`)
+          .join('\n'),
+      );
+    }
+  }
+
+  return parts.join('\n');
+}
+
+function truncate(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return text.slice(0, maxLength) + `\n... [truncated at ${maxLength} chars]`;
+}

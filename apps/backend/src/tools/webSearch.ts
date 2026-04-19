@@ -9,24 +9,6 @@ interface SearchResult {
   snippet: string;
 }
 
-/** Strip HTML tags and decode entities — used for cleaning scraped snippets. */
-function strip(html: string): string {
-  return html
-    .replace(/<[^>]+>/g, '')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-/**
- * Search via Brave Search API (requires BRAVE_SEARCH_API_KEY in env).
- * Returns null when the key is not configured.
- */
 async function braveSearch(query: string, maxResults: number): Promise<SearchResult[] | null> {
   if (!config.BRAVE_SEARCH_API_KEY) return null;
 
@@ -56,63 +38,89 @@ async function braveSearch(query: string, maxResults: number): Promise<SearchRes
   }));
 }
 
-/**
- * Fallback: DuckDuckGo HTML search — no API key required.
- * Scrapes the public HTML results page with regex.
- */
-async function duckDuckGoSearch(query: string, maxResults: number): Promise<SearchResult[]> {
-  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+async function searxngSearch(query: string, maxResults: number): Promise<SearchResult[] | null> {
+  if (!config.SEARXNG_URL) return null;
 
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; Koda/1.0)',
-      Accept: 'text/html',
-    },
-    signal: AbortSignal.timeout(10_000),
-  });
+  const url = new URL('/search', config.SEARXNG_URL);
+  url.searchParams.set('q', query);
+  url.searchParams.set('format', 'json');
+  url.searchParams.set('categories', 'general');
 
-  if (!res.ok) {
-    throw new Error(`DuckDuckGo returned HTTP ${res.status}`);
-  }
+  try {
+    const res = await fetch(url.toString(), {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(10_000),
+    });
 
-  const html = await res.text();
-  const results: SearchResult[] = [];
-
-  // Each result block: <div class="result results_links_deep web-result"> ... </div>
-  // Title link:   <a rel="nofollow" class="result__a" href="...">Title</a>
-  // Snippet link: <a class="result__snippet" ...>Snippet text</a>
-  const blockRe = /<div[^>]+class="[^"]*result[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/g;
-  const titleRe = /class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/;
-  const snippetRe = /class="result__snippet"[^>]*>([\s\S]*?)<\/a>/;
-
-  let match: RegExpExecArray | null;
-  while ((match = blockRe.exec(html)) !== null && results.length < maxResults) {
-    const block = match[1] ?? '';
-    const titleMatch = titleRe.exec(block);
-    const snippetMatch = snippetRe.exec(block);
-    if (!titleMatch) continue;
-
-    // DDG result URLs are redirect links — extract the actual URL from uddg param
-    const rawHref = titleMatch[1] ?? '';
-    let finalUrl = rawHref;
-    try {
-      const uddg = new URL('https://duckduckgo.com' + rawHref).searchParams.get('uddg');
-      if (uddg) finalUrl = decodeURIComponent(uddg);
-    } catch {
-      // leave as-is
+    if (!res.ok) {
+      logger.warn({ status: res.status }, 'searxng search failed');
+      return null;
     }
 
-    results.push({
-      title: strip(titleMatch[2] ?? ''),
-      url: finalUrl,
-      snippet: snippetMatch ? strip(snippetMatch[1] ?? '') : '',
-    });
-  }
+    const data = (await res.json()) as {
+      results?: Array<{ title?: string; url?: string; content?: string }>;
+    };
 
-  return results;
+    return (data.results ?? []).slice(0, maxResults).map((r) => ({
+      title: r.title ?? '',
+      url: r.url ?? '',
+      snippet: r.content ?? '',
+    }));
+  } catch (err) {
+    logger.warn({ err }, 'searxng search error');
+    return null;
+  }
 }
 
-/** Format results as readable text for the model. */
+async function duckDuckGoSearch(query: string, maxResults: number): Promise<SearchResult[]> {
+  // DDG HTML API — no Playwright needed, just fetch the HTML and parse manually
+  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; Koda/1.0)',
+        Accept: 'text/html',
+      },
+      signal: AbortSignal.timeout(12_000),
+    });
+
+    if (!res.ok) return [];
+    const html = await res.text();
+
+    // Extract results using lightweight regex — avoids Playwright dependency
+    const results: SearchResult[] = [];
+    const resultRegex = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+    const snippetRegex = /<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+
+    const titles: Array<{ url: string; title: string }> = [];
+    let m: RegExpExecArray | null;
+    while ((m = resultRegex.exec(html)) !== null && titles.length < maxResults) {
+      const rawUrl = m[1] ?? '';
+      const rawTitle = (m[2] ?? '').replace(/<[^>]+>/g, '').trim();
+      let finalUrl = rawUrl;
+      try {
+        const uddg = new URL(rawUrl).searchParams.get('uddg');
+        if (uddg) finalUrl = decodeURIComponent(uddg);
+      } catch { /* leave as-is */ }
+      if (rawTitle && finalUrl.startsWith('http')) titles.push({ url: finalUrl, title: rawTitle });
+    }
+
+    const snippets: string[] = [];
+    while ((m = snippetRegex.exec(html)) !== null) {
+      snippets.push((m[1] ?? '').replace(/<[^>]+>/g, '').trim());
+    }
+
+    for (let i = 0; i < titles.length; i++) {
+      results.push({ title: titles[i]!.title, url: titles[i]!.url, snippet: snippets[i] ?? '' });
+    }
+
+    return results;
+  } catch (err) {
+    logger.warn({ err }, 'ddg fallback search error');
+    return [];
+  }
+}
+
 function formatResults(results: SearchResult[], query: string): string {
   if (results.length === 0) return `No results found for: ${query}`;
   return [
@@ -135,11 +143,11 @@ export const webSearchTool: Tool<WebSearchArgs> = {
     logger.debug({ query, maxResults }, 'web_search');
 
     try {
-      // Prefer Brave (higher quality) when API key is set; fall back to DDG.
+      // Priority: Brave API → SearxNG → DuckDuckGo HTML
       const results =
         (await braveSearch(query, maxResults)) ??
+        (await searxngSearch(query, maxResults)) ??
         (await duckDuckGoSearch(query, maxResults));
-
       return formatResults(results, query);
     } catch (err) {
       return `Search failed: ${err instanceof Error ? err.message : String(err)}`;
