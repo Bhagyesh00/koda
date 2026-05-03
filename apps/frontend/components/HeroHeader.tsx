@@ -1,10 +1,26 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Shield, FlaskConical, BookOpen, Wrench, Camera, History, Network, Users, Brain, Eye, PenLine, Terminal, Bot, Download } from 'lucide-react';
+import {
+  Shield,
+  FlaskConical,
+  BookOpen,
+  Wrench,
+  Camera,
+  History,
+  Network,
+  Users,
+  Brain,
+  Eye,
+  PenLine,
+  Terminal,
+  Bot,
+  Download,
+} from 'lucide-react';
 import { useChatStore } from '@/lib/store';
 import { getSession, exportSessionUrl } from '@/lib/api';
 import { CostMeter } from './CostMeter';
+import { IconButton } from '@/lib/components';
 import { cn } from '@/lib/cn';
 
 interface Props {
@@ -19,7 +35,27 @@ interface Props {
   onOpenTokenDashboard?: () => void;
 }
 
-export function HeroHeader({ sessionId, onToggleGuardrails, onOpenCustomTools, onToggleSnapshots, onToggleRegret, onOpenPeerReview, onOpenMiniAgent, miniAgentOpen, onOpenTokenDashboard }: Props) {
+/**
+ * Top-of-screen header. Title on the left, activity pill while streaming,
+ * and a row of toggle/action buttons on the right.
+ *
+ * Every button uses IconButton, which means:
+ *   - Built-in aria-label (required by the type system)
+ *   - Consistent toggle styling via `pressed`
+ *   - Built-in count/dot badge via `count`
+ * No more hand-rolled classNames duplicated nine times.
+ */
+export function HeroHeader({
+  sessionId,
+  onToggleGuardrails,
+  onOpenCustomTools,
+  onToggleSnapshots,
+  onToggleRegret,
+  onOpenPeerReview,
+  onOpenMiniAgent,
+  miniAgentOpen,
+  onOpenTokenDashboard,
+}: Props) {
   const streaming = useChatStore((s) => s.streaming);
   const activity = useChatStore((s) => s.activity);
   const guardrailsOpen = useChatStore((s) => s.guardrailsOpen);
@@ -33,6 +69,7 @@ export function HeroHeader({ sessionId, onToggleGuardrails, onOpenCustomTools, o
   const setContextLensOpen = useChatStore((s) => s.setContextLensOpen);
   const setHypothesisLogOpen = useChatStore((s) => s.setHypothesisLogOpen);
   const setMentalModelOpen = useChatStore((s) => s.setMentalModelOpen);
+
   const [title, setTitle] = useState<string>('New session');
 
   useEffect(() => {
@@ -46,7 +83,7 @@ export function HeroHeader({ sessionId, onToggleGuardrails, onOpenCustomTools, o
         const s = await getSession(sessionId);
         if (!cancelled) setTitle(s.title || 'New session');
       } catch {
-        /* ignore */
+        /* network error — keep prior title */
       }
     })();
     return () => {
@@ -57,143 +94,101 @@ export function HeroHeader({ sessionId, onToggleGuardrails, onOpenCustomTools, o
   const pendingHypotheses = hypotheses.filter((h) => h.result === 'pending').length;
 
   return (
-    <header className="flex items-center justify-between border-b border-border bg-bg-panel/60 px-6 py-3 backdrop-blur">
-
+    <header className="flex items-center justify-between gap-4 border-b border-border bg-bg-panel/60 px-6 py-3 backdrop-blur">
       <div className="flex min-w-0 items-center gap-3">
         <h1 className="truncate text-[14px] font-semibold tracking-tight text-fg">{title}</h1>
         {streaming && <ActivityPill activity={activity} />}
       </div>
-      <div className="flex items-center gap-1.5">
+
+      <div className="flex items-center gap-1">
         <CostMeter sessionId={sessionId} onOpenDashboard={onOpenTokenDashboard} />
 
-        {/* Context Lens */}
-        <button
-          onClick={() => setContextLensOpen(!contextLensOpen)}
+        <IconButton
+          icon={<BookOpen />}
+          aria-label="Toggle Context Lens"
           title="Context Lens — files in agent memory"
-          className={cn(
-            'flex items-center gap-1 rounded px-2 py-1 text-[11px] transition',
-            contextLensOpen
-              ? 'bg-accent/20 text-accent'
-              : 'text-fg-subtle hover:bg-bg-hover hover:text-fg',
-          )}
-        >
-          <BookOpen size={12} />
-          {contextFiles.length > 0 && (
-            <span className="text-[10px]">{contextFiles.length}</span>
-          )}
-        </button>
+          pressed={contextLensOpen}
+          onClick={() => setContextLensOpen(!contextLensOpen)}
+          count={contextFiles.length || undefined}
+        />
 
-        {/* Mental Model */}
-        <button
-          onClick={() => setMentalModelOpen(!mentalModelOpen)}
+        <IconButton
+          icon={<Network />}
+          aria-label="Toggle Mental Model"
           title="Mental Model — agent's working memory graph"
-          className={cn(
-            'flex items-center gap-1 rounded px-2 py-1 text-[11px] transition',
-            mentalModelOpen
-              ? 'bg-accent/20 text-accent'
-              : 'text-fg-subtle hover:bg-bg-hover hover:text-fg',
-          )}
-        >
-          <Network size={12} />
-          {mentalModelNodes.length > 0 && (
-            <span className="text-[10px]">{mentalModelNodes.length}</span>
-          )}
-        </button>
+          pressed={mentalModelOpen}
+          onClick={() => setMentalModelOpen(!mentalModelOpen)}
+          count={mentalModelNodes.length || undefined}
+        />
 
-        {/* Hypothesis Log */}
-        <button
-          onClick={() => setHypothesisLogOpen(!hypothesisLogOpen)}
+        <IconButton
+          icon={<FlaskConical />}
+          aria-label="Toggle Hypothesis Engine"
           title="Hypothesis Engine — intent vs outcome"
-          className={cn(
-            'flex items-center gap-1 rounded px-2 py-1 text-[11px] transition',
-            hypothesisLogOpen
-              ? 'bg-accent/20 text-accent'
-              : 'text-fg-subtle hover:bg-bg-hover hover:text-fg',
-          )}
-        >
-          <FlaskConical size={12} />
-          {pendingHypotheses > 0 && (
-            <span className="text-[10px] text-yellow-400">{pendingHypotheses}</span>
-          )}
-        </button>
+          pressed={hypothesisLogOpen}
+          onClick={() => setHypothesisLogOpen(!hypothesisLogOpen)}
+          count={pendingHypotheses || undefined}
+          countTone="warn"
+        />
 
-        {/* Guardrails */}
-        <button
-          onClick={onToggleGuardrails}
+        <IconButton
+          icon={<Shield />}
+          aria-label="Toggle Guardrails"
           title="Guardrails — pre-execution rules"
-          className={cn(
-            'flex items-center gap-1 rounded px-2 py-1 text-[11px] transition',
-            guardrailsOpen
-              ? 'bg-accent/20 text-accent'
-              : 'text-fg-subtle hover:bg-bg-hover hover:text-fg',
-          )}
-        >
-          <Shield size={12} />
-        </button>
+          pressed={guardrailsOpen}
+          onClick={onToggleGuardrails}
+        />
 
-        {/* Regret Journal */}
-        <button
-          onClick={onToggleRegret}
+        <IconButton
+          icon={<History />}
+          aria-label="Open Regret Journal"
           title="Regret Journal — thrash detection"
-          className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-fg-subtle transition hover:bg-bg-hover hover:text-fg"
-        >
-          <History size={12} />
-          {regrets.length > 0 && (
-            <span className="text-[10px] text-yellow-400">{regrets.length}</span>
-          )}
-        </button>
+          onClick={onToggleRegret}
+          count={regrets.length || undefined}
+          countTone="warn"
+        />
 
-        {/* Snapshots */}
-        <button
-          onClick={onToggleSnapshots}
+        <IconButton
+          icon={<Camera />}
+          aria-label="Open Snapshots"
           title="Snapshot Timeline — time-travel checkpoints"
-          className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-fg-subtle transition hover:bg-bg-hover hover:text-fg"
-        >
-          <Camera size={12} />
-        </button>
+          onClick={onToggleSnapshots}
+        />
 
-        {/* Peer Review */}
-        <button
-          onClick={onOpenPeerReview}
+        <IconButton
+          icon={<Users />}
+          aria-label="Open Peer Review"
           title="Peer Review — regenerate last turn at two temperatures"
-          className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-fg-subtle transition hover:bg-bg-hover hover:text-fg"
-        >
-          <Users size={12} />
-        </button>
+          onClick={onOpenPeerReview}
+        />
 
-        {/* Mini Agent */}
-        <button
-          onClick={onOpenMiniAgent}
+        <IconButton
+          icon={<Bot />}
+          aria-label="Toggle Mini Agent"
           title="Mini Agent — auto-run tasks without approval"
+          pressed={miniAgentOpen}
           disabled={!sessionId}
-          className={cn(
-            'flex items-center gap-1 rounded px-2 py-1 text-[11px] transition disabled:opacity-40',
-            miniAgentOpen
-              ? 'bg-accent/20 text-accent'
-              : 'text-fg-subtle hover:bg-bg-hover hover:text-fg',
-          )}
-        >
-          <Bot size={12} />
-        </button>
+          onClick={onOpenMiniAgent}
+        />
 
-        {/* Custom Tools */}
-        <button
-          onClick={onOpenCustomTools}
+        <IconButton
+          icon={<Wrench />}
+          aria-label="Open Custom Tool Builder"
           title="Custom Tool Builder"
-          className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-fg-subtle transition hover:bg-bg-hover hover:text-fg"
-        >
-          <Wrench size={12} />
-        </button>
+          onClick={onOpenCustomTools}
+        />
 
-        {/* Export session as markdown */}
         {sessionId && (
+          // Native <a download> — IconButton is a button, not a link, so the
+          // download attr would be ignored. Kept inline but mirrors the look.
           <a
             href={exportSessionUrl(sessionId)}
             download
+            aria-label="Export session as Markdown"
             title="Export session as Markdown"
-            className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-fg-subtle transition hover:bg-bg-hover hover:text-fg"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-fg-subtle transition-colors hover:bg-bg-hover hover:text-fg"
           >
-            <Download size={12} />
+            <Download size={14} />
           </a>
         )}
       </div>
@@ -203,23 +198,24 @@ export function HeroHeader({ sessionId, onToggleGuardrails, onOpenCustomTools, o
 
 // ── Activity Pill ─────────────────────────────────────────────────────────────
 
-type Activity = { phase: 'thinking' | 'reading' | 'writing' | 'running' | 'idle'; tool?: string; detail?: string } | null;
+type Activity =
+  | { phase: 'thinking' | 'reading' | 'writing' | 'running' | 'idle'; tool?: string; detail?: string }
+  | null;
 
 const PHASE_CONFIG = {
-  thinking: { Icon: Brain,    label: 'Thinking',  color: 'text-purple-400' },
-  reading:  { Icon: Eye,      label: 'Reading',   color: 'text-blue-400'   },
-  writing:  { Icon: PenLine,  label: 'Editing',   color: 'text-amber-400'  },
-  running:  { Icon: Terminal, label: 'Running',   color: 'text-green-400'  },
-  idle:     { Icon: Brain,    label: '',          color: 'text-fg-subtle'  },
+  thinking: { Icon: Brain, label: 'Thinking', color: 'text-purple-400' },
+  reading: { Icon: Eye, label: 'Reading', color: 'text-blue-400' },
+  writing: { Icon: PenLine, label: 'Editing', color: 'text-amber-400' },
+  running: { Icon: Terminal, label: 'Running', color: 'text-green-400' },
+  idle: { Icon: Brain, label: '', color: 'text-fg-subtle' },
 } as const;
 
 function ActivityPill({ activity }: { activity: Activity }) {
   const phase = activity?.phase ?? 'thinking';
   if (phase === 'idle' || !activity) {
-    // still streaming but no specific phase yet — show generic pulse
     return (
-      <span className="flex items-center gap-1.5 text-[11px] text-fg-subtle">
-        <span className="h-1.5 w-1.5 animate-pulseDot rounded-full bg-accent" />
+      <span className="flex items-center gap-1.5 text-[11px] text-fg-subtle" aria-live="polite">
+        <span className="h-1.5 w-1.5 animate-pulseDot rounded-full bg-accent" aria-hidden />
         thinking
       </span>
     );
@@ -229,15 +225,17 @@ function ActivityPill({ activity }: { activity: Activity }) {
   const detail = activity.detail;
 
   return (
-    <span className={cn('flex items-center gap-1.5 text-[11px]', color)}>
-      <Icon size={11} className="shrink-0 opacity-80" />
+    <span
+      className={cn('flex items-center gap-1.5 text-[11px]', color)}
+      aria-live="polite"
+      aria-label={`Agent ${label.toLowerCase()}${detail ? `: ${detail}` : ''}`}
+    >
+      <Icon size={11} className="shrink-0 opacity-80" aria-hidden />
       <span className="font-medium">{label}</span>
       {detail && (
-        <span className="max-w-[180px] truncate font-mono text-[10px] opacity-70">
-          {detail}
-        </span>
+        <span className="max-w-[180px] truncate font-mono text-[10px] opacity-70">{detail}</span>
       )}
-      <span className="h-1 w-1 animate-pulseDot rounded-full bg-current opacity-60" />
+      <span className="h-1 w-1 animate-pulseDot rounded-full bg-current opacity-60" aria-hidden />
     </span>
   );
 }

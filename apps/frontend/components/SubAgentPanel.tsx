@@ -12,24 +12,15 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import type { SubAgentDisplay } from '@/lib/store';
+
+export type { SubAgentDisplay };
 
 /* ── Thread colour palette ─────────────────────────────────── */
 const THREAD_COLORS = ['#d97757', '#8b5cf6', '#06b6d4', '#22c55e', '#f472b6'];
 
 function threadColor(index: number): string {
   return THREAD_COLORS[index % THREAD_COLORS.length];
-}
-
-/* ── Types ─────────────────────────────────────────────────── */
-export interface SubAgentDisplay {
-  index: number;
-  description: string;
-  status: 'running' | 'completed' | 'error';
-  thinking: string[];
-  toolCalls: Array<{ tool: string; args: unknown; output?: string }>;
-  result?: string;
-  startedAt: number;
-  endedAt?: number;
 }
 
 interface Props {
@@ -237,7 +228,7 @@ export function SubAgentPanel({ agents, allDone }: Props) {
       {/* ── Thread cards ─────────────────────────────────── */}
       <div className="space-y-1">
         {agents.map((agent) => (
-          <ThreadCard key={agent.index} agent={agent} />
+          <ThreadCard key={agent.agentId} agent={agent} />
         ))}
       </div>
 

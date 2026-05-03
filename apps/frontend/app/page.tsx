@@ -25,8 +25,8 @@ import { MiniAgentPanel } from '@/components/MiniAgentPanel';
 import { TokenDashboard } from '@/components/TokenDashboard';
 import { useChatStore } from '@/lib/store';
 import { startChatStream, startWatchStream } from '@/lib/sseClient';
+import { createChatStreamHandler } from '@/lib/sseHandlers';
 import { getSession, listSessions, getPlan, createSession, updateSessionCwd } from '@/lib/api';
-import { partitionThinking } from '@/lib/thinkingParser';
 import type { DisplayMessage } from '@/lib/store';
 
 export default function Page() {
@@ -46,11 +46,6 @@ export default function Page() {
   const abortRef = useRef<AbortController | null>(null);
   const watchAbortRef = useRef<AbortController | null>(null);
   const bootstrapped = useRef(false);
-  // Cumulative per-message buffer used for live <think> partitioning
-  const messageBuffersRef = useRef<Map<string, string>>(new Map());
-  // Track which messageIds already received a canonical `thinking` SSE so
-  // we don't create a duplicate ThinkingBlock from the message_end handler.
-  const thinkingReceivedRef = useRef<Set<string>>(new Set());
 
   const autoAccept = useChatStore((s) => s.autoAccept);
 
@@ -193,176 +188,37 @@ export default function Page() {
       .replace(/<file[\s\S]*?<\/file>\s*/g, '')
       .replace(/<folder[^/]*\/>\s*/g, '')
       .trim() || text;
+    // Clear last turn's sub-agent panel so a fresh user message starts a clean
+    // canvas. Done HERE rather than on 'done' so completed agents remain
+    // visible while the user reads the response.
+    useChatStore.getState().clearSubAgents();
     appendUser(displayText);
     setStreaming(true);
     setError(null);
 
     abortRef.current = startChatStream(
       { sessionId, message: text, mode: opts?.modeOverride ?? mode, autoApproveAll: autoAccept, showThinking: opts?.showThinking },
-      {
-        onEvent: (ev) => {
-          switch (ev.type) {
-            case 'message_start':
-              startAssistant(ev.messageId);
-              messageBuffersRef.current.set(ev.messageId, '');
-              break;
-            case 'delta': {
-              appendAssistantDelta(ev.messageId, ev.text);
-              const prev = messageBuffersRef.current.get(ev.messageId) ?? '';
-              const next = prev + ev.text;
-              messageBuffersRef.current.set(ev.messageId, next);
-              const { liveThinking } = partitionThinking(next);
-              if (liveThinking) {
-                useChatStore.getState().setLiveThinking(ev.messageId, liveThinking);
-              }
-              // As soon as </think> closes, promote thinking to a permanent
-              // ThinkingBlock inserted ABOVE the streaming assistant bubble.
-              // This avoids the layout inversion where LiveThinkingPreview
-              // sits below the response because it renders after all messages.
-              if (
-                !thinkingReceivedRef.current.has(ev.messageId) &&
-                next.includes('</think>')
-              ) {
-                const m = next.match(/<think>([\s\S]*?)<\/think>/);
-                if (m?.[1]?.trim()) {
-                  thinkingReceivedRef.current.add(ev.messageId);
-                  addThinking(ev.messageId, m[1].trim());
-                  useChatStore.getState().finalizeLiveThinking();
-                }
-              }
-              break;
-            }
-            case 'message_end': {
-              endAssistant(ev.messageId);
-              // Only promote liveThinking to a permanent block when the
-              // canonical `thinking` SSE never arrived (model stream ended
-              // before </think> closed, so extractThinkingBlocks found nothing).
-              if (!thinkingReceivedRef.current.has(ev.messageId)) {
-                const remainingLive = useChatStore.getState().liveThinking;
-                if (
-                  remainingLive &&
-                  remainingLive.messageId === ev.messageId &&
-                  remainingLive.text.trim()
-                ) {
-                  addThinking(ev.messageId, remainingLive.text);
-                }
-              }
-              thinkingReceivedRef.current.delete(ev.messageId);
-              messageBuffersRef.current.delete(ev.messageId);
-              useChatStore.getState().finalizeLiveThinking();
-              break;
-            }
-            case 'thinking':
-              // Skip if already promoted from the delta stream when </think> closed.
-              if (!thinkingReceivedRef.current.has(ev.messageId)) {
-                thinkingReceivedRef.current.add(ev.messageId);
-                addThinking(ev.messageId, ev.text);
-              }
-              break;
-            case 'activity_update':
-              setActivity({ phase: ev.phase, tool: ev.tool, detail: ev.detail });
-              break;
-            case 'tool_request':
-              addToolRequest(ev.callId, ev.tool, ev.args, ev.requiresApproval);
-              break;
-            case 'tool_result':
-              setToolResult(ev.callId, ev.ok, ev.output);
-              break;
-            case 'todo_update':
-              setTodos(ev.todos);
-              break;
-            case 'plan_update':
-              setPlanContent(ev.content);
-              break;
-            case 'mode_change':
-              setMode(ev.mode);
-              break;
-            case 'guardrail_triggered':
-              addToast(
-                `${ev.action === 'block' ? 'Blocked' : 'Warning'}: ${ev.message}`,
-                ev.action === 'block' ? 'error' : 'info',
-              );
-              break;
-            case 'decision_request':
-              addDecision(ev.callId, ev.question, ev.options);
-              break;
-            case 'context_update':
-              setContextFiles(ev.files);
-              break;
-            case 'hypothesis_update':
-              updateHypothesisEntry(ev.id, ev.result, ev.actualOutcome);
-              addToast(
-                `Hypothesis ${ev.result}: ${ev.actualOutcome?.slice(0, 60) ?? ''}`,
-                ev.result === 'confirmed' ? 'success' : 'info',
-              );
-              break;
-            case 'snapshot_created':
-              addToast(`Snapshot saved: ${ev.description}`, 'success');
-              break;
-            case 'cost_update':
-              useChatStore.getState().setCostUpdate(ev.turnTokens, ev.sessionTokens, ev.budget);
-              break;
-            case 'drift_warning':
-              useChatStore.getState().setDriftWarning({ similarity: ev.similarity, action: ev.action });
-              addToast(`Drift warning: action may not serve pinned intent`, 'info');
-              break;
-            case 'regret_detected':
-              useChatStore.getState().addRegret({ path: ev.path, editCount: ev.editCount, timespanMs: ev.timespanMs });
-              break;
-            case 'semantic_diff':
-              useChatStore.getState().setSemanticDiff(ev.path, ev.summary, ev.added, ev.removed, ev.changed);
-              break;
-            case 'blast_radius':
-              useChatStore.getState().setBlastRadius(ev.callId, {
-                importers: ev.importers,
-                references: ev.references,
-                tests: ev.tests,
-              });
-              break;
-            case 'proof_result':
-              useChatStore.getState().setProofResult(ev.callId, ev.passed, ev.output);
-              break;
-            case 'mental_model_update':
-              useChatStore.getState().setMentalModel(ev.nodes, ev.edges);
-              break;
-            case 'memory_recall':
-              useChatStore.getState().setMemoryRecall(ev.matches);
-              break;
-            case 'test_results':
-              useChatStore.getState().addTestResult(ev.callId, {
-                runner: ev.runner,
-                passed: ev.passed,
-                failed: ev.failed,
-                skipped: ev.skipped,
-                duration: ev.duration,
-                failures: ev.failures,
-              });
-              break;
-            case 'workspace_change':
-              addWorkspaceChange({ files: ev.files, changeType: ev.changeType });
-              break;
-            case 'error':
-              if (ev.code !== 'aborted') {
-                setError(ev.message);
-                addToast(ev.message, 'error');
-              }
-              break;
-            case 'done':
-              setActivity(null);
-              setStreaming(false);
-              useChatStore.getState().finalizeLiveThinking();
-              messageBuffersRef.current.clear();
-              break;
-          }
+      createChatStreamHandler({
+        actions: {
+          startAssistant,
+          appendAssistantDelta,
+          endAssistant,
+          addThinking,
+          setActivity,
+          addToolRequest,
+          setToolResult,
+          setTodos,
+          setPlanContent,
+          setMode,
+          addToast,
+          addDecision,
+          setContextFiles,
+          updateHypothesisEntry,
+          setError,
+          setStreaming,
+          addWorkspaceChange,
         },
-        onError: (e) => {
-          setError(e.message);
-          setStreaming(false);
-        },
-        onClose: () => {
-          setStreaming(false);
-        },
-      },
+      }),
     );
   }
 

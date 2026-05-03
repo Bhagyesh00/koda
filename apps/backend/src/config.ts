@@ -26,7 +26,7 @@ const ConfigSchema = z.object({
   WORK_DIR: z.string().default('./workspace'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   AUTH_TOKEN: z.string().min(1).default('dev-secret-change-me'),
-  OLLAMA_BASE_URL: z.string().url().default('http://103.186.18.11:11434'),
+  OLLAMA_BASE_URL: z.string().url().default('http://localhost:11434'),
   OLLAMA_MODEL: z.string().min(1).default('koda'),
   /** Context window size passed to Ollama. Increase for larger codebases. */
   OLLAMA_NUM_CTX: z.coerce.number().int().positive().default(32768),
@@ -77,6 +77,26 @@ const ConfigSchema = z.object({
   LANGFUSE_SECRET_KEY: z.string().optional(),
   LANGFUSE_PUBLIC_KEY: z.string().optional(),
   LANGFUSE_HOST: z.string().url().optional(),
+  /**
+   * Phase 3 — Pre-Flight Simulation.
+   *
+   * `auto`   try Docker once at startup; fall back to host if unavailable
+   * `docker` require Docker; pre-flight commands fail fast if missing
+   * `host`   never use Docker; run pre-flight on the host shell
+   */
+  PREFLIGHT_MODE: z.enum(['auto', 'docker', 'host']).default('auto'),
+  /** Container image used for pre-flight runs (proof verification, hypothesis re-checks). */
+  PREFLIGHT_IMAGE: z.string().default('node:20-alpine'),
+  /** Wall-clock cap per pre-flight command — also bounds the auto-retry loop. */
+  PREFLIGHT_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
+  /** Max LLM-driven retries when a proof verification fails. 0 disables auto-retry. */
+  PREFLIGHT_MAX_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
+  /**
+   * Phase 5 — autonomous tech-debt scanner interval (ms). When set to a
+   * positive number, a background scan runs every N ms. Default 0 = disabled;
+   * users can still trigger scans manually via POST /v1/tech-debt/scan.
+   */
+  TECH_DEBT_SCAN_INTERVAL_MS: z.coerce.number().int().min(0).default(0),
 });
 
 const parsed = ConfigSchema.parse(process.env);

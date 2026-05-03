@@ -7,14 +7,18 @@ import { sessionStore } from './sessions/store.js';
 import { initLangfuse } from './telemetry/langfuse.js';
 import { initRedis } from './cache/redis.js';
 import { loadSchedules } from './routes/schedules.js';
+import { techDebtStore } from './techDebt/store.js';
+import { startAutoScanLoop } from './routes/techDebt.js';
 
 async function main() {
   await initPool();
   await runMigrations();
   await sessionStore.initialize();
+  await techDebtStore.initialize();
   initLangfuse();
   await initRedis();
   await loadSchedules();
+  startAutoScanLoop();
 
   const app = createServer();
   app.listen(config.BACKEND_PORT, () => {

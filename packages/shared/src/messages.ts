@@ -40,13 +40,37 @@ export type Todo = z.infer<typeof TodoSchema>;
 export const SessionModeSchema = z.enum(['plan', 'build', 'expert']);
 export type SessionMode = z.infer<typeof SessionModeSchema>;
 
-export const GuardActionSchema = z.enum(['block', 'warn']);
+/** `tier` is for risk-tier rules — see RiskTier below. Pattern/architecture rules use block/warn. */
+export const GuardActionSchema = z.enum(['block', 'warn', 'tier']);
 export type GuardAction = z.infer<typeof GuardActionSchema>;
+
+export const RiskTierSchema = z.enum(['low', 'medium', 'high', 'critical']);
+export type RiskTier = z.infer<typeof RiskTierSchema>;
+
+/**
+ * Architecture rule payload. Layers are named globs; edges declare which layers
+ * may import which other layers. An edit that introduces an import violating an
+ * edge is blocked (or warned) the same way a pattern rule fires.
+ *
+ *   layers: { core: ['src/core/**'], api: ['src/api/**'] }
+ *   edges:  [{ from: 'api', to: 'core' }]   // api may import core; reverse is blocked
+ */
+export const ArchitectureRuleSchema = z.object({
+  layers: z.record(z.string(), z.array(z.string()).min(1)),
+  edges: z.array(z.object({ from: z.string(), to: z.string() })),
+});
+export type ArchitectureRule = z.infer<typeof ArchitectureRuleSchema>;
 
 export const GuardRuleSchema = z.object({
   id: z.string(),
   enabled: z.boolean().default(true),
   description: z.string().min(1),
+  /**
+   * Rule discriminator. Optional so existing stored rules (without `kind`) and
+   * frontend presets keep working without explicit migration; the engine
+   * normalises `undefined` to `'pattern'` at evaluation time.
+   */
+  kind: z.enum(['pattern', 'architecture', 'risk_tier']).optional(),
   /** Tool names this rule applies to. Use ['*'] for all tools. */
   tools: z.array(z.string()).default(['*']),
   /** Glob pattern matched against args.path (file tools). Empty = any path. */
@@ -55,6 +79,14 @@ export const GuardRuleSchema = z.object({
   commandPattern: z.string().optional(),
   action: GuardActionSchema,
   message: z.string().min(1),
+  /** Architecture-rule payload — only meaningful when kind === 'architecture'. */
+  architecture: ArchitectureRuleSchema.optional(),
+  /**
+   * Risk-tier classification — only meaningful when kind === 'risk_tier'.
+   * When a tool call matches a risk_tier rule, the engine forces the approval
+   * gate even in expert mode / autoApproveAll for high or critical tiers.
+   */
+  riskTier: RiskTierSchema.optional(),
 });
 export type GuardRule = z.infer<typeof GuardRuleSchema>;
 
@@ -81,6 +113,8 @@ export const SessionSchema = z.object({
     actualOutcome: z.string().optional(),
     result: z.enum(['confirmed', 'refuted', 'pending']).default('pending'),
     ts: z.number(),
+    /** Decision-Ledger rationale: why was this hypothesis recorded? */
+    reason: z.string().optional(),
   })).default([]),
   /** Snapshots (git stashes) taken this session. */
   snapshots: z.array(z.object({
@@ -117,6 +151,8 @@ export const SessionSchema = z.object({
     hash: z.string(),
     signature: z.string(),
     ts: z.number(),
+    /** Decision-Ledger rationale: why was this proof recorded? */
+    reason: z.string().optional(),
   })).default([]),
   /** Persistent constraints injected into every system prompt (Phase 31). */
   constraints: z.array(z.object({
@@ -132,12 +168,16 @@ export const SessionSchema = z.object({
     messageIndex: z.number(),
     summary: z.string(),
     toolCallsSoFar: z.number(),
+    /** Decision-Ledger rationale: why was this checkpoint taken? */
+    reason: z.string().optional(),
   })).default([]),
   /** User rejections — patterns the user has undone/rejected (Phase 31). */
   rejections: z.array(z.object({
     ts: z.number(),
     context: z.string(),
     rejected: z.string(),
+    /** Decision-Ledger rationale: why was this rejection recorded? */
+    reason: z.string().optional(),
   })).default([]),
   /** Performance budget for generated code (Phase 31). */
   performanceBudget: z.object({

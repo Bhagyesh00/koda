@@ -7,6 +7,28 @@ export interface Toast {
   variant: 'info' | 'success' | 'error';
 }
 
+/**
+ * Sub-agent display state. The canonical type lives here so the SubAgentPanel
+ * component imports from the store rather than the other way around.
+ *
+ * `index` is NOT part of the stored shape — it's derived at render time from
+ * subAgentOrder so an agent's color/animation slot stays stable as agents
+ * arrive and complete out of order.
+ */
+export interface SubAgentDisplay {
+  index: number;
+  agentId: string;
+  description: string;
+  status: 'running' | 'completed' | 'error';
+  thinking: string[];
+  toolCalls: Array<{ tool: string; args: unknown; output?: string; ok?: boolean }>;
+  result?: string;
+  startedAt: number;
+  endedAt?: number;
+}
+
+type StoredSubAgent = Omit<SubAgentDisplay, 'index'>;
+
 export interface HypothesisEntry {
   id: string;
   claim: string;
@@ -104,6 +126,12 @@ interface ChatState {
   // Sprint 2 — Test results (keyed by callId)
   testResults: Record<string, { runner: string; passed: number; failed: number; skipped: number; duration?: string; failures: Array<{ name: string; message: string }> }>;
 
+  // Sub-agent live telemetry (consumes subagent_update + subagent_event SSE).
+  // Order is preserved separately so render sequence stays stable as the
+  // backend completes agents out of arrival order.
+  subAgents: Record<string, StoredSubAgent>;
+  subAgentOrder: string[];
+
   /** When true every tool call is auto-approved without a user confirmation prompt. */
   autoAccept: boolean;
   setAutoAccept: (v: boolean) => void;
@@ -189,6 +217,13 @@ interface ChatState {
 
   // Sprint 2 — Test results
   addTestResult: (callId: string, result: ChatState['testResults'][string]) => void;
+
+  // Sub-agents
+  upsertSubAgent: (agentId: string, patch: Partial<StoredSubAgent> & { description?: string }) => void;
+  appendSubAgentThinking: (agentId: string, text: string) => void;
+  appendSubAgentToolCall: (agentId: string, tool: string, args: unknown) => void;
+  setSubAgentToolResult: (agentId: string, output: string, ok: boolean) => void;
+  clearSubAgents: () => void;
 }
 
 export const useChatStore = create<ChatState>((set) => ({
@@ -220,6 +255,8 @@ export const useChatStore = create<ChatState>((set) => ({
   mentalModelOpen: false,
   memoryRecall: [],
   testResults: {},
+  subAgents: {},
+  subAgentOrder: [],
 
   autoAccept: false,
   setAutoAccept: (v) => set({ autoAccept: v }),
@@ -250,6 +287,8 @@ export const useChatStore = create<ChatState>((set) => ({
       mentalModel: { nodes: [], edges: [] },
       memoryRecall: [],
       testResults: {},
+      subAgents: {},
+      subAgentOrder: [],
     }),
 
   appendUser: (text) =>
@@ -425,4 +464,99 @@ export const useChatStore = create<ChatState>((set) => ({
 
   addTestResult: (callId, result) =>
     set((s) => ({ testResults: { ...s.testResults, [callId]: result } })),
+
+  upsertSubAgent: (agentId, patch) =>
+    set((s) => {
+      const existing = s.subAgents[agentId];
+      const merged: StoredSubAgent = {
+        agentId,
+        description: patch.description ?? existing?.description ?? '',
+        status: patch.status ?? existing?.status ?? 'running',
+        thinking: patch.thinking ?? existing?.thinking ?? [],
+        toolCalls: patch.toolCalls ?? existing?.toolCalls ?? [],
+        result: patch.result ?? existing?.result,
+        startedAt: patch.startedAt ?? existing?.startedAt ?? Date.now(),
+        endedAt: patch.endedAt ?? existing?.endedAt,
+      };
+      return {
+        subAgents: { ...s.subAgents, [agentId]: merged },
+        subAgentOrder: existing ? s.subAgentOrder : [...s.subAgentOrder, agentId],
+      };
+    }),
+
+  appendSubAgentThinking: (agentId, text) =>
+    set((s) => {
+      const existing = s.subAgents[agentId];
+      // First event for an unknown agent — register it lazily so an
+      // out-of-order subagent_event arriving before subagent_update doesn't drop.
+      if (!existing) {
+        return {
+          subAgents: {
+            ...s.subAgents,
+            [agentId]: {
+              agentId,
+              description: '',
+              status: 'running',
+              thinking: [text],
+              toolCalls: [],
+              startedAt: Date.now(),
+            },
+          },
+          subAgentOrder: [...s.subAgentOrder, agentId],
+        };
+      }
+      return {
+        subAgents: {
+          ...s.subAgents,
+          [agentId]: { ...existing, thinking: [...existing.thinking, text] },
+        },
+      };
+    }),
+
+  appendSubAgentToolCall: (agentId, tool, args) =>
+    set((s) => {
+      const existing = s.subAgents[agentId];
+      const newCall = { tool, args };
+      if (!existing) {
+        return {
+          subAgents: {
+            ...s.subAgents,
+            [agentId]: {
+              agentId,
+              description: '',
+              status: 'running',
+              thinking: [],
+              toolCalls: [newCall],
+              startedAt: Date.now(),
+            },
+          },
+          subAgentOrder: [...s.subAgentOrder, agentId],
+        };
+      }
+      return {
+        subAgents: {
+          ...s.subAgents,
+          [agentId]: { ...existing, toolCalls: [...existing.toolCalls, newCall] },
+        },
+      };
+    }),
+
+  setSubAgentToolResult: (agentId, output, ok) =>
+    set((s) => {
+      const existing = s.subAgents[agentId];
+      if (!existing || existing.toolCalls.length === 0) return s;
+      // Attach the result to the most recent tool call lacking one.
+      const lastIdx = existing.toolCalls.length - 1;
+      const updated = existing.toolCalls.map((tc, i) =>
+        i === lastIdx && tc.output === undefined ? { ...tc, output, ok } : tc,
+      );
+      return {
+        subAgents: {
+          ...s.subAgents,
+          [agentId]: { ...existing, toolCalls: updated },
+        },
+      };
+    }),
+
+  clearSubAgents: () => set({ subAgents: {}, subAgentOrder: [] }),
 }));

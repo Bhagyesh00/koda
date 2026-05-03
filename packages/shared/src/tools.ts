@@ -717,10 +717,27 @@ export type RefactorTxArgs = z.infer<typeof RefactorTxArgs>;
 export const MultiAgentArgs = z.object({
   goal: z.string().min(1).describe('Overall goal the agents are coordinating on'),
   agents: z.array(z.object({
-    role: z.string().min(1).describe('Role of the agent (e.g. "researcher", "implementer", "reviewer")'),
+    role: z.string().min(1).describe('Role of the agent (e.g. "security", "performance", "qa", or any custom name)'),
     prompt: z.string().min(1),
+    /**
+     * Optional skill slug to bias the agent's expertise (e.g. "senior-security-engineer").
+     * If omitted, common roles like "security" / "qa" / "performance" auto-map to the matching skill.
+     */
+    skill: z.string().optional(),
   })).min(2).max(5),
   maxRounds: z.number().int().min(1).max(5).optional().default(3),
+  /**
+   * Phase 4 — when true (default), agents are prompted to emit JSON with
+   * { claim, evidence, confidence, dissents } per round. Falls back to free-form
+   * gracefully if a model can't produce valid JSON.
+   */
+  structured: z.boolean().optional().default(true),
+  /**
+   * Phase 4 — when true (default), an arbitration pass runs after the agent
+   * rounds: a synthesizer produces a final recommendation that highlights
+   * consensus, disputes, and open questions across all agents' contributions.
+   */
+  synthesize: z.boolean().optional().default(true),
 });
 export type MultiAgentArgs = z.infer<typeof MultiAgentArgs>;
 

@@ -6,6 +6,7 @@ import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { clearShellCwd } from '../sandbox/shellState.js';
 import { getPool, query } from '../db/client.js';
+import { stopWatchingForSession } from '../watch/watcher.js';
 
 const SESSIONS_DIR = path.join(config.WORK_DIR_ABS, '.koda', 'sessions');
 
@@ -27,8 +28,23 @@ function backfill(s: Session): Session {
   return s;
 }
 
+/**
+ * Per-session async persist coordinator.
+ *
+ * Coalesces bursts (3 rapid appendMessage calls → 1 or 2 disk writes that always
+ * include the latest state) and serialises writes per session so a slow disk
+ * never produces out-of-order state on disk. Failures are logged; errors no
+ * longer get swallowed by an unawaited .catch() like before.
+ */
+interface PersistState {
+  running: boolean;
+  dirty: boolean;
+  tail: Promise<void>;
+}
+
 class SessionStore {
   private readonly sessions = new Map<string, Session>();
+  private readonly persistState = new Map<string, PersistState>();
 
   /** Must be called once at startup before the HTTP server begins accepting requests. */
   async initialize(): Promise<void> {
@@ -63,25 +79,79 @@ class SessionStore {
   }
 
   private persist(s: Session): void {
+    let state = this.persistState.get(s.id);
+    if (!state) {
+      state = { running: false, dirty: false, tail: Promise.resolve() };
+      this.persistState.set(s.id, state);
+    }
+    // If a write is in flight, just mark dirty — runPersistLoop will pick up the
+    // latest in-memory state on its next iteration (coalescing).
+    if (state.running) {
+      state.dirty = true;
+      return;
+    }
+    state.running = true;
+    state.tail = state.tail.then(() => this.runPersistLoop(s.id));
+  }
+
+  private async runPersistLoop(id: string): Promise<void> {
+    const state = this.persistState.get(id);
+    if (!state) return;
+    try {
+      do {
+        state.dirty = false;
+        // Skip writes for a session that was deleted while we were queued —
+        // otherwise a stale persist would resurrect it on disk.
+        const live = this.sessions.get(id);
+        if (!live) return;
+        try {
+          await this.doPersist(live);
+        } catch (err) {
+          logger.error({ err, sessionId: id }, 'session persist failed');
+        }
+      } while (state.dirty);
+    } finally {
+      state.running = false;
+    }
+  }
+
+  private async doPersist(s: Session): Promise<void> {
     if (getPool()) {
-      query(
+      await query(
         `INSERT INTO sessions (id, data, created_at, updated_at)
          VALUES ($1, $2, to_timestamp($3 / 1000.0), to_timestamp($4 / 1000.0))
          ON CONFLICT (id) DO UPDATE
            SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
         [s.id, JSON.stringify(s), s.createdAt, s.updatedAt],
-      ).catch((err) => logger.error({ err, sessionId: s.id }, 'failed to persist session to postgres'));
-    } else {
-      const dest = path.join(SESSIONS_DIR, `${s.id}.json`);
-      const tmp = `${dest}.tmp`;
-      try {
-        fs.writeFileSync(tmp, JSON.stringify(s, null, 2));
-        fs.renameSync(tmp, dest);
-      } catch (err) {
-        logger.error({ err, sessionId: s.id }, 'failed to persist session');
-        try { fs.unlinkSync(tmp); } catch { /* ignore */ }
-      }
+      );
+      return;
     }
+    const dest = path.join(SESSIONS_DIR, `${s.id}.json`);
+    const tmp = `${dest}.tmp.${process.pid}.${Date.now()}`;
+    try {
+      // Ensure parent exists. Pre-fix this only worked when leaked test data
+      // had already created the dir; with an isolated tmp WORK_DIR the first
+      // write to a fresh workspace would ENOENT.
+      fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+      fs.writeFileSync(tmp, JSON.stringify(s, null, 2));
+      fs.renameSync(tmp, dest);
+    } catch (err) {
+      try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+      throw err;
+    }
+  }
+
+  /**
+   * Wait for queued persists to complete. Pass a session id to wait for one,
+   * omit to wait for all. Use on shutdown or in tests that need durability.
+   */
+  async flush(id?: string): Promise<void> {
+    if (id !== undefined) {
+      const state = this.persistState.get(id);
+      if (state) await state.tail;
+      return;
+    }
+    await Promise.allSettled(Array.from(this.persistState.values()).map((s) => s.tail));
   }
 
   create(opts: { title?: string; cwd?: string; parentId?: string; branchPoint?: number } = {}): Session {
@@ -364,6 +434,10 @@ class SessionStore {
     const existed = this.sessions.delete(id);
     if (existed) {
       clearShellCwd(id);
+      stopWatchingForSession(id);
+      // Drop pending persists; runPersistLoop's `this.sessions.has(id)` guard
+      // makes any in-flight iteration a no-op even if it's already running.
+      this.persistState.delete(id);
       if (getPool()) {
         query('DELETE FROM sessions WHERE id = $1', [id]).catch((err) =>
           logger.error({ err, id }, 'failed to delete session from postgres'),

@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import type { SSEWriter } from '../sse.js';
 
 export interface ToolContext {
   sessionId: string;
@@ -10,6 +11,12 @@ export interface ToolContext {
   workDir: string;
   /** Forwarded from the HTTP request — fires when the client disconnects or hits abort. */
   signal?: AbortSignal;
+  /**
+   * Optional SSE writer for tools that want to stream progress events
+   * (e.g. agent_spawn forwarding sub-agent activity). Tools must guard with
+   * `?.` since unit tests construct contexts without it.
+   */
+  sse?: SSEWriter;
 }
 
 export interface Tool<TArgs = unknown> {

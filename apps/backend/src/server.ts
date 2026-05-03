@@ -21,6 +21,8 @@ import { webhookRouter } from './routes/webhook.js';
 import { schedulesRouter } from './routes/schedules.js';
 import { authRouter } from './routes/auth.js';
 import { ttsRouter } from './routes/tts.js';
+import { ledgerRouter } from './routes/ledger.js';
+import { techDebtRouter } from './routes/techDebt.js';
 import { registerAllTools } from './tools/index.js';
 import { loadCustomTools } from './tools/customLoader.js';
 
@@ -60,6 +62,8 @@ export function createServer(): express.Express {
   app.use('/v1', requireAuth, webhookRouter);
   app.use('/v1', requireAuth, schedulesRouter);
   app.use('/v1', requireAuth, ttsRouter);
+  app.use('/v1', requireAuth, ledgerRouter);
+  app.use('/v1', requireAuth, techDebtRouter);
 
   app.use(errorHandler);
 

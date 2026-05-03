@@ -1,11 +1,26 @@
-import type { Todo, SessionMode } from './messages.js';
+import type { Todo, SessionMode, RiskTier } from './messages.js';
 
 export type ServerEvent =
   | { type: 'message_start'; messageId: string }
   | { type: 'delta'; messageId: string; text: string }
   | { type: 'thinking'; messageId: string; text: string }
   | { type: 'activity_update'; phase: 'thinking' | 'reading' | 'writing' | 'running' | 'idle'; tool?: string; detail?: string }
-  | { type: 'tool_request'; callId: string; tool: string; args: unknown; requiresApproval: boolean }
+  | {
+      type: 'tool_request';
+      callId: string;
+      tool: string;
+      args: unknown;
+      requiresApproval: boolean;
+      /** Risk tier attached by a matching `risk_tier` guardrail rule (Phase 2). */
+      riskTier?: RiskTier;
+      /**
+       * True when approval is being forced by a high/critical risk-tier rule
+       * even though the user is in expert mode or has autoApproveAll set —
+       * lets the UI flag the prompt as a governance escalation rather than a
+       * normal approval card.
+       */
+      forceApproval?: boolean;
+    }
   | { type: 'tool_result'; callId: string; ok: boolean; output: string }
   | { type: 'todo_update'; todos: Todo[] }
   | { type: 'plan_update'; content: string }
@@ -18,7 +33,19 @@ export type ServerEvent =
   | { type: 'snapshot_created'; ref: string; description: string; ts: number }
   | { type: 'workspace_change'; files: string[]; changeType: 'modified' | 'added' | 'deleted' }
   | { type: 'decision_request'; callId: string; question: string; options: Array<{ label: string; pros: string[]; cons: string[] }> }
-  | { type: 'subagent_update'; agentId: string; status: 'running' | 'done' | 'error'; result?: string }
+  | { type: 'subagent_update'; agentId: string; status: 'running' | 'done' | 'error'; result?: string; description?: string }
+  // Mid-run sub-agent telemetry — thinking tokens, tool calls, tool results.
+  // Emitted by agent_spawn so the UI can render live activity per sub-agent.
+  | {
+      type: 'subagent_event';
+      agentId: string;
+      event: 'thinking' | 'delta' | 'tool_call' | 'tool_result';
+      text?: string;
+      tool?: string;
+      args?: unknown;
+      output?: string;
+      ok?: boolean;
+    }
   // Phase 28 — cost meter
   | { type: 'cost_update'; turnTokens: number; sessionTokens: number; elapsedMs: number; budget?: number }
   // Phase 23 — intent drift
@@ -29,8 +56,21 @@ export type ServerEvent =
   | { type: 'semantic_diff'; path: string; summary: string; added: number; removed: number; changed: number }
   // Phase 21 — blast radius
   | { type: 'blast_radius'; callId: string; importers: string[]; references: number; tests: string[] }
-  // Phase 24 — proof-carrying changes
-  | { type: 'proof_result'; callId: string; passed: boolean; output: string }
+  // Phase 24 — proof-carrying changes (Phase 3 adds Pre-Flight metadata)
+  | {
+      type: 'proof_result';
+      callId: string;
+      passed: boolean;
+      output: string;
+      /** True when the proof command ran inside a Docker container (Phase 3). */
+      ranInContainer?: boolean;
+      /** 1-based attempt number for this proof (Phase 3 auto-retry). */
+      attempt?: number;
+      /** Configured maximum (PREFLIGHT_MAX_RETRIES + 1). */
+      maxAttempts?: number;
+      /** True when the orchestrator will silently re-prompt the agent to fix. */
+      willRetry?: boolean;
+    }
   // Phase 30 — mental model
   | { type: 'mental_model_update'; nodes: Array<{ id: string; kind: 'file' | 'symbol' | 'concept'; label: string; weight: number }>; edges: Array<{ from: string; to: string; kind: 'imports' | 'references' | 'co-accessed' }> }
   // Phase 29 — memory recall

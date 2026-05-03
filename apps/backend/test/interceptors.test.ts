@@ -32,7 +32,15 @@ function makeSse(): SseSpy {
 }
 
 function makeTurn(): TurnState {
-  return { pendingHypothesis: null, pendingProof: null };
+  // Phase 3 added retryTracker/proofRetries/pendingHints — interceptors don't
+  // use them, but TurnState is fully required so we initialise everything.
+  return {
+    pendingHypothesis: null,
+    pendingProof: null,
+    retryTracker: new Map(),
+    proofRetries: new Map(),
+    pendingHints: [],
+  };
 }
 
 function makeCtx(overrides: Partial<ToolCallCtx> = {}): ToolCallCtx {

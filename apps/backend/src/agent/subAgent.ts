@@ -23,6 +23,8 @@ export interface SubAgentTask {
   prompt: string;
   skill?: string;
   maxIterations?: number;
+  /** Hard wall-clock deadline for this sub-agent in ms. Default 120 s. */
+  timeoutMs?: number;
 }
 
 export interface SubAgentEvent {
@@ -33,6 +35,9 @@ export interface SubAgentEvent {
   output?: string;
   ok?: boolean;
 }
+
+/** Default per-sub-agent wall-clock — keeps a stuck Ollama call from hanging the parent turn. */
+const DEFAULT_SUB_AGENT_TIMEOUT_MS = 120_000;
 
 function buildSubAgentToolDefs(): OllamaToolDef[] {
   return TOOL_DESCRIPTORS
@@ -81,11 +86,24 @@ export async function runSubAgent(
     { role: 'user', content: task.prompt },
   ];
 
+  // Compose parent abort + per-task timeout into a single signal threaded through
+  // every Ollama / tool call. Without this a stuck model call would block until
+  // the parent turn's 10-minute wall-clock fired.
+  const timeoutMs = task.timeoutMs ?? DEFAULT_SUB_AGENT_TIMEOUT_MS;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  if (parentCtx.signal) {
+    if (parentCtx.signal.aborted) ac.abort();
+    else parentCtx.signal.addEventListener('abort', () => ac.abort(), { once: true });
+  }
+  const signal = ac.signal;
+
   const maxIter = task.maxIterations ?? 5;
   let finalText = '';
 
+  try {
   for (let iter = 0; iter < maxIter; iter++) {
-    if (parentCtx.signal?.aborted) break;
+    if (signal.aborted) break;
 
     let assistantText = '';
     let nativeToolCalls: Array<{ function: { name: string; arguments: Record<string, unknown> } }> = [];
@@ -97,12 +115,12 @@ export async function runSubAgent(
           assistantText += delta;
           onEvent({ type: 'delta', text: delta });
         },
-        parentCtx.signal,
+        signal,
         { tools: toolDefs },
       );
       nativeToolCalls = result.toolCalls;
     } catch (err) {
-      if (parentCtx.signal?.aborted) break;
+      if (signal?.aborted) break;
       logger.error({ err, task: task.description }, 'sub-agent LLM call failed');
       break;
     }
@@ -161,7 +179,7 @@ export async function runSubAgent(
       output = await tool.run(parsedArgs, {
         sessionId: parentCtx.sessionId,
         workDir: parentCtx.workDir,
-        signal: parentCtx.signal,
+        signal: signal,
       });
     } catch (err) {
       ok = false;
@@ -172,7 +190,10 @@ export async function runSubAgent(
     messages.push({ role: 'tool', content: storedOutput });
     onEvent({ type: 'tool_result', tool: toolName, ok, output: storedOutput });
 
-    if (parentCtx.signal?.aborted) break;
+    if (signal?.aborted) break;
+  }
+  } finally {
+    clearTimeout(timer);
   }
 
   return finalText;

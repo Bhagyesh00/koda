@@ -10,6 +10,7 @@ import {
 import { useChatStore } from '@/lib/store';
 import { cn } from '@/lib/cn';
 import { clearSessionMessages, compactSession, updateSessionModel, updateSessionSkill } from '@/lib/api';
+import { loadWhisper, transcribeBlob, type ModelProgress } from '@/lib/whisper';
 import { SkillOrb } from './SkillOrb';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -84,11 +85,15 @@ export function Composer({
   const [filesLoading, setFilesLoading] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(0);
 
-  const [recording, setRecording] = useState(false);
+  // Voice input runs entirely in the browser via @huggingface/transformers
+  // (Whisper). The button cycles through these states; idle is the default.
+  const [voiceStatus, setVoiceStatus] = useState<'idle' | 'loading' | 'recording' | 'transcribing'>('idle');
+  const [voiceProgress, setVoiceProgress] = useState<ModelProgress | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const speechRef = useRef<any>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordStreamRef = useRef<MediaStream | null>(null);
 
   const ref = useRef<HTMLTextAreaElement>(null);
   const mentionRef = useRef<HTMLDivElement>(null);
@@ -114,36 +119,128 @@ export function Composer({
     else if (m === 'bypass') { setAutoAccept(true); if (mode !== 'plan') setMode('build'); }
   }
 
-  // ── Voice input (Web Speech API) ──────────────────────────────────────────
+  // ── Voice input (Whisper, browser-local) ─────────────────────────────────
+  //
+  // Replaces the Web Speech API path. Audio never leaves the browser; the
+  // model downloads once (~75 MB) and is cached in IndexedDB by the
+  // transformers.js runtime. Falls back from WebGPU to WASM automatically.
+  //
+  // State machine:  idle → loading → recording → transcribing → idle
+  //
+  // The mic button is the single user-facing entry point. Click while idle
+  // starts recording (after lazy-loading the model on first use). Click while
+  // recording stops and triggers transcription.
 
-  function toggleVoice() {
+  function stopRecordStream() {
+    recordStreamRef.current?.getTracks().forEach((t) => t.stop());
+    recordStreamRef.current = null;
+  }
+
+  async function toggleVoice() {
     if (typeof window === 'undefined') return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const w = window as any;
-    const SR = w.SpeechRecognition ?? w.webkitSpeechRecognition;
-    if (!SR) {
-      onCommandFeedback?.('Voice input requires Chrome or Edge', false);
+
+    // Click while transcribing or loading is a no-op — the button is busy.
+    if (voiceStatus === 'transcribing' || voiceStatus === 'loading') return;
+
+    // Click while recording → stop. The recorder's onstop handler does the
+    // actual transcription work below.
+    if (voiceStatus === 'recording') {
+      try {
+        recorderRef.current?.stop();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        onCommandFeedback?.(`Could not stop recording: ${msg}`, false);
+        setVoiceStatus('idle');
+        stopRecordStream();
+      }
       return;
     }
-    if (recording) {
-      speechRef.current?.stop();
-      setRecording(false);
+
+    // Microphone permission first — surface a clean error if the user denies.
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      onCommandFeedback?.(`Microphone access denied: ${msg}`, false);
       return;
     }
-    const sr = new SR();
-    sr.lang = 'en-US';
-    sr.continuous = false;
-    sr.interimResults = false;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    sr.onresult = (e: any) => {
-      const transcript = (e.results[0]?.[0]?.transcript as string) ?? '';
-      setText((t) => (t ? `${t} ${transcript}` : transcript));
+    recordStreamRef.current = stream;
+
+    // Lazy-load the model. Subsequent invocations return the cached pipeline.
+    setVoiceStatus('loading');
+    setVoiceProgress(null);
+    try {
+      await loadWhisper((p) => setVoiceProgress(p));
+    } catch (err) {
+      stopRecordStream();
+      setVoiceStatus('idle');
+      setVoiceProgress(null);
+      const msg = err instanceof Error ? err.message : String(err);
+      onCommandFeedback?.(`Failed to load voice model: ${msg}`, false);
+      return;
+    }
+    setVoiceProgress(null);
+
+    // Start MediaRecorder. Browsers pick a sensible default mime (webm/opus
+    // on Chromium, mp4 on Safari) — both decode fine via AudioContext.
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(stream);
+    } catch (err) {
+      stopRecordStream();
+      setVoiceStatus('idle');
+      const msg = err instanceof Error ? err.message : String(err);
+      onCommandFeedback?.(`Could not access microphone: ${msg}`, false);
+      return;
+    }
+
+    audioChunksRef.current = [];
+    recorder.ondataavailable = (e: BlobEvent) => {
+      if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data);
     };
-    sr.onend = () => setRecording(false);
-    sr.onerror = () => { setRecording(false); onCommandFeedback?.('Voice recognition failed', false); };
-    sr.start();
-    speechRef.current = sr;
-    setRecording(true);
+    recorder.onstop = async () => {
+      stopRecordStream();
+      const chunks = audioChunksRef.current;
+      audioChunksRef.current = [];
+      const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+      if (blob.size === 0) {
+        setVoiceStatus('idle');
+        onCommandFeedback?.('No audio captured — try holding the mic button longer.', false);
+        return;
+      }
+      setVoiceStatus('transcribing');
+      try {
+        const text = await transcribeBlob(blob);
+        if (text) {
+          setText((t) => (t ? `${t} ${text}` : text));
+        } else {
+          onCommandFeedback?.('No speech detected.', false);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        onCommandFeedback?.(`Transcription failed: ${msg}`, false);
+      } finally {
+        setVoiceStatus('idle');
+      }
+    };
+    recorder.onerror = (e: Event) => {
+      stopRecordStream();
+      setVoiceStatus('idle');
+      const msg = (e as unknown as { error?: { message?: string } }).error?.message ?? 'recording error';
+      onCommandFeedback?.(`Recording failed: ${msg}`, false);
+    };
+
+    try {
+      recorder.start();
+      recorderRef.current = recorder;
+      setVoiceStatus('recording');
+    } catch (err) {
+      stopRecordStream();
+      setVoiceStatus('idle');
+      const msg = err instanceof Error ? err.message : String(err);
+      onCommandFeedback?.(`Could not start recording: ${msg}`, false);
+    }
   }
 
   // ── File upload ────────────────────────────────────────────────────────────
@@ -578,14 +675,30 @@ export function Composer({
               disabled={streaming || disabled || uploading}
             />
 
-            {/* Voice input */}
+            {/* Voice input — Whisper, runs entirely in the browser */}
             <ToolbarButton
-              icon={recording ? <MicOff size={13} /> : <Mic size={13} />}
-              label={recording ? 'Stop recording' : 'Voice input'}
-              active={recording}
-              activeColor="text-red-400"
+              icon={
+                voiceStatus === 'loading' || voiceStatus === 'transcribing'
+                  ? <Loader2 size={13} className="animate-spin" />
+                  : voiceStatus === 'recording'
+                    ? <MicOff size={13} />
+                    : <Mic size={13} />
+              }
+              label={
+                voiceStatus === 'loading'
+                  ? voiceProgress
+                    ? `Loading model… ${voiceProgress.pct}%`
+                    : 'Loading voice model…'
+                  : voiceStatus === 'recording'
+                    ? 'Stop recording'
+                    : voiceStatus === 'transcribing'
+                      ? 'Transcribing…'
+                      : 'Voice input (local Whisper)'
+              }
+              active={voiceStatus !== 'idle'}
+              activeColor={voiceStatus === 'recording' ? 'text-red-400' : 'text-accent'}
               onClick={toggleVoice}
-              disabled={streaming || disabled}
+              disabled={streaming || disabled || voiceStatus === 'loading' || voiceStatus === 'transcribing'}
             />
 
             {/* Thinking toggle */}

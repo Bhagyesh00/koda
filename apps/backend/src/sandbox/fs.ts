@@ -19,19 +19,35 @@ export function resolveInside(root: string, userPath: string): string {
     throw new SandboxError(`Path escapes work dir: ${userPath}`);
   }
 
-  // Realpath check (only if exists) to defeat symlink escapes
+  // Realpath check to defeat symlink escapes. Try the joined path first; if it
+  // doesn't exist, walk up to the nearest existing ancestor and verify *that*.
+  // Avoids the prior TOCTOU window between existsSync() and realpathSync().
   try {
-    if (fs.existsSync(joined)) {
-      const real = fs.realpathSync(joined);
-      const realRoot = fs.realpathSync(root);
-      const realRel = path.relative(realRoot, real);
+    const realRoot = fs.realpathSync(root);
+    let probe = joined;
+    let realProbe: string | null = null;
+    // Walk up from the requested path until we hit something that exists,
+    // then realpath that ancestor. This catches both existing-file symlink
+    // escapes AND new-file paths that include a symlinked parent dir.
+    while (probe.length >= root.length) {
+      try {
+        realProbe = fs.realpathSync(probe);
+        break;
+      } catch {
+        const parent = path.dirname(probe);
+        if (parent === probe) break;
+        probe = parent;
+      }
+    }
+    if (realProbe) {
+      const realRel = path.relative(realRoot, realProbe);
       if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
         throw new SandboxError(`Symlink escapes work dir: ${userPath}`);
       }
     }
   } catch (err) {
     if (err instanceof SandboxError) throw err;
-    // ignore other realpath errors (file may not exist yet)
+    // realpath failures on the root itself are non-fatal — lexical check stands.
   }
 
   return joined;

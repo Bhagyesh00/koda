@@ -2,87 +2,159 @@ import { MultiAgentArgs } from '@koda/shared';
 import type { Tool } from './registry.js';
 import { streamOllamaChat, type OllamaMessage } from '../agent/ollama.js';
 import { logger } from '../logger.js';
+import {
+  type BlackboardEntry,
+  parseContribution,
+  buildAgentSystemPrompt,
+  buildSynthesisPrompt,
+  aggregateBlackboard,
+  renderAggregation,
+} from './multiAgent.helpers.js';
 
-interface BlackboardEntry {
-  agentRole: string;
-  round: number;
-  content: string;
-  ts: number;
-}
+const SYNTH_TEMPERATURE = 0.2;
+const AGENT_TEMPERATURE = 0.3;
 
 /**
- * Orchestrates parallel agents with a shared blackboard. Each round, every agent
- * reads the blackboard state and posts its contribution. Final output is a
- * merged synthesis of all rounds.
+ * Phase 4 — Multi-Agent Structured Debate.
+ *
+ * Orchestrates parallel agents with a shared blackboard. Each round, every
+ * agent reads the structured contributions of the others and posts its own
+ * (`{claim, evidence, confidence, dissents}`). After all rounds, a synthesizer
+ * arbitrates and produces a final recommendation; a deterministic aggregation
+ * is appended as a safety net so consensus and disputes are always visible
+ * even when the LLM synthesis fails.
+ *
+ * The previous free-form behaviour is preserved by passing `structured: false`.
  */
 export const multiAgentTool: Tool<typeof MultiAgentArgs._type> = {
   name: 'multi_agent',
   description:
-    'Orchestrate parallel sub-agents with a shared blackboard. Agents can post findings and read each other\'s work. Requires approval.',
+    'Orchestrate parallel sub-agents with a shared blackboard. Agents can post structured findings (claim/evidence/dissents) and an arbitrator produces a final recommendation. Requires approval.',
   requiresApproval: true,
   schema: MultiAgentArgs,
   async run(args, ctx) {
     const blackboard: BlackboardEntry[] = [];
     const maxRounds = args.maxRounds ?? 3;
+    const structured = args.structured ?? true;
+    const synthesize = args.synthesize ?? true;
 
     for (let round = 1; round <= maxRounds; round++) {
-      logger.info({ round, agents: args.agents.length }, 'multi_agent round start');
+      logger.info({ round, agents: args.agents.length, structured }, 'multi_agent round start');
 
-      // Run all agents in parallel for this round
       const roundResults = await Promise.all(
-        args.agents.map(async (agent) => {
-          const blackboardText =
-            blackboard.length === 0
-              ? '(blackboard empty — you are first)'
-              : blackboard
-                  .map((b) => `[${b.agentRole} · round ${b.round}]\n${b.content}`)
-                  .join('\n\n');
-
+        args.agents.map(async (agent): Promise<BlackboardEntry> => {
+          const systemPrompt = buildAgentSystemPrompt({
+            goal: args.goal,
+            role: agent.role,
+            skill: agent.skill,
+            userPrompt: agent.prompt,
+            round,
+            maxRounds,
+            blackboard,
+            structured,
+          });
           const messages: OllamaMessage[] = [
-            {
-              role: 'system',
-              content:
-                `You are a "${agent.role}" agent collaborating with other specialists.\n` +
-                `Shared goal: ${args.goal}\n\n` +
-                `Blackboard (other agents' contributions):\n${blackboardText}\n\n` +
-                `Round: ${round} of ${maxRounds}. ` +
-                `Contribute your specific expertise. Be concise and build on what others have said.`,
-            },
+            { role: 'system', content: systemPrompt },
             { role: 'user', content: agent.prompt },
           ];
 
-          let out = '';
+          let raw = '';
           try {
             await streamOllamaChat(
               messages,
-              (delta) => { out += delta; },
+              (delta) => { raw += delta; },
               ctx.signal,
-              { temperature: 0.3 },
+              { temperature: AGENT_TEMPERATURE },
             );
           } catch (e) {
-            out = `ERROR: ${e instanceof Error ? e.message : String(e)}`;
+            raw = `ERROR: ${e instanceof Error ? e.message : String(e)}`;
           }
-          return { agentRole: agent.role, content: out.trim(), round, ts: Date.now() };
+
+          const parsed = structured ? parseContribution(raw) : null;
+          return {
+            agentRole: agent.role,
+            round,
+            ts: Date.now(),
+            raw: raw.trim(),
+            parsed: parsed != null,
+            ...(parsed ? { structured: parsed } : {}),
+          };
         }),
       );
 
       blackboard.push(...roundResults);
 
-      // Early exit if all agents say converged
-      const allConverged = roundResults.every(
-        (r) => /\b(converged|done|final|no further changes)\b/i.test(r.content.slice(-200)),
-      );
-      if (allConverged) {
-        logger.info({ round }, 'multi_agent converged early');
+      // Early-exit heuristics:
+      //  (a) structured mode — every parsed contribution reports confidence ≥ 90 and no dissents
+      //  (b) free-form fallback — every agent says "converged" / "done" / "final"
+      const allHighConfNoDissent =
+        structured &&
+        roundResults.every(
+          (r) => r.parsed && r.structured!.confidence >= 90 && r.structured!.dissents.length === 0,
+        );
+      const allConvergedFreeform =
+        !structured &&
+        roundResults.every((r) =>
+          /\b(converged|done|final|no further changes)\b/i.test(r.raw.slice(-200)),
+        );
+      if (allHighConfNoDissent || allConvergedFreeform) {
+        logger.info({ round, reason: allHighConfNoDissent ? 'consensus' : 'free-form converged' }, 'multi_agent early exit');
         break;
       }
     }
 
-    // Final synthesis
-    const synthesis = blackboard
-      .map((b) => `## ${b.agentRole} (round ${b.round})\n\n${b.content}`)
+    // ── Synthesis pass ────────────────────────────────────────────────────────
+    let synthesis = '';
+    if (synthesize) {
+      try {
+        const synthMessages: OllamaMessage[] = [
+          { role: 'system', content: buildSynthesisPrompt({ goal: args.goal, blackboard }) },
+          { role: 'user', content: 'Produce the synthesis report now.' },
+        ];
+        await streamOllamaChat(
+          synthMessages,
+          (delta) => { synthesis += delta; },
+          ctx.signal,
+          { temperature: SYNTH_TEMPERATURE },
+        );
+        synthesis = synthesis.trim();
+      } catch (e) {
+        logger.warn({ err: e }, 'multi_agent synthesis failed — falling back to deterministic aggregation only');
+      }
+    }
+
+    // Deterministic aggregation always runs — provides a structured floor even
+    // when the LLM synthesis is empty, garbled, or skipped.
+    const aggregation = aggregateBlackboard(blackboard);
+    const aggReport = renderAggregation(aggregation);
+
+    // Verbose per-contribution dump appended last for transparency / debugging.
+    const transcript = blackboard
+      .map((b) => {
+        if (b.structured) {
+          const dissents = b.structured.dissents.length
+            ? `\n\n*Dissents:* ${b.structured.dissents.map((d) => `[${d.targetRole}] ${d.reason}`).join('; ')}`
+            : '';
+          const evidence = b.structured.evidence.length
+            ? `\n\n*Evidence:*\n- ${b.structured.evidence.join('\n- ')}`
+            : '';
+          return (
+            `## ${b.agentRole} — round ${b.round} (confidence ${b.structured.confidence})\n\n` +
+            `**Claim:** ${b.structured.claim}${evidence}${dissents}`
+          );
+        }
+        return `## ${b.agentRole} — round ${b.round} (unstructured)\n\n${b.raw}`;
+      })
       .join('\n\n---\n\n');
 
-    return `Multi-agent coordination complete: ${args.agents.length} agents × ${Math.min(maxRounds, Math.max(...blackboard.map((b) => b.round)))} rounds\n\n${synthesis}`;
+    const header = `Multi-agent debate complete: ${args.agents.length} agents × ${aggregation.rounds} round${aggregation.rounds === 1 ? '' : 's'} (${aggregation.parsedContributions}/${aggregation.totalContributions} structured)`;
+
+    const sections: string[] = [header];
+    if (synthesis) {
+      sections.push(`# Arbitrated synthesis\n\n${synthesis}`);
+    }
+    sections.push(aggReport);
+    sections.push(`# Full transcript\n\n${transcript}`);
+    return sections.join('\n\n---\n\n');
   },
 };

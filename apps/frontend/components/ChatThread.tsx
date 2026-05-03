@@ -1,7 +1,7 @@
 'use client';
 
-import { Fragment, useEffect, useRef } from 'react';
-import { useChatStore } from '@/lib/store';
+import { Fragment, useEffect, useMemo, useRef } from 'react';
+import { useChatStore, type SubAgentDisplay } from '@/lib/store';
 import { stripThinkingBlocks } from '@/lib/thinkingParser';
 import { MessageBubble } from './MessageBubble';
 import { ToolCallCard } from './ToolCallCard';
@@ -12,6 +12,7 @@ import { LiveThinkingPreview } from './LiveThinkingPreview';
 import { InlineActivityHint } from './ActivityStatus';
 import { Logo } from './Logo';
 import { TtsPlayer } from './TtsPlayer';
+import { SubAgentPanel } from './SubAgentPanel';
 
 interface Props {
   onDecisionResolve: (callId: string, optionIndex: number) => void;
@@ -21,11 +22,28 @@ interface Props {
 export function ChatThread({ onDecisionResolve, onReplay }: Props) {
   const messages = useChatStore((s) => s.messages);
   const error = useChatStore((s) => s.error);
+  const subAgents = useChatStore((s) => s.subAgents);
+  const subAgentOrder = useChatStore((s) => s.subAgentOrder);
   const ref = useRef<HTMLDivElement>(null);
+
+  // Project the keyed map back into an ordered array, attaching the derived
+  // `index` the panel needs for stable color/animation slots.
+  const subAgentArr = useMemo<SubAgentDisplay[]>(
+    () =>
+      subAgentOrder
+        .map((id, i) => {
+          const a = subAgents[id];
+          return a ? { ...a, index: i } : null;
+        })
+        .filter((a): a is SubAgentDisplay => a !== null),
+    [subAgents, subAgentOrder],
+  );
+  const allSubAgentsDone =
+    subAgentArr.length > 0 && subAgentArr.every((a) => a.status !== 'running');
 
   useEffect(() => {
     ref.current?.scrollTo({ top: ref.current.scrollHeight, behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, subAgentArr.length]);
 
   return (
     <div ref={ref} className="flex-1 overflow-y-auto">
@@ -110,6 +128,11 @@ export function ChatThread({ onDecisionResolve, onReplay }: Props) {
             />
           );
         })}
+        {subAgentArr.length > 0 && (
+          <div className="my-3">
+            <SubAgentPanel agents={subAgentArr} allDone={allSubAgentsDone} />
+          </div>
+        )}
         <InlineActivityHint />
         {error && (
           <div className="mx-6 my-3 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-[13px] text-red-300">

@@ -1,4 +1,5 @@
 import type { SSEWriter } from '../../sse.js';
+import type { RiskTier } from '@koda/shared';
 
 /**
  * Mutable state shared across all tool calls within a single LLM turn.
@@ -10,6 +11,18 @@ export interface TurnState {
   pendingProof: { description: string; command: string } | null;
   /** Tracks retry attempts per tool name for error auto-resolution. */
   retryTracker: Map<string, number>;
+  /**
+   * Phase 3 — Pre-Flight Simulation auto-retry counter, keyed by proof command.
+   * Increments each time `runProofVerify` fires the LLM-fix loop for the same
+   * verification command; capped at `config.PREFLIGHT_MAX_RETRIES`.
+   */
+  proofRetries: Map<string, number>;
+  /**
+   * Phase 3 — system-message hints queued by post-execution stages. Drained at
+   * the start of each loop iteration and pushed into the Ollama message array
+   * so the model gets the failure context before its next response.
+   */
+  pendingHints: string[];
 }
 
 /** Minimal tool descriptor needed by stage functions. */
@@ -48,6 +61,15 @@ export interface ToolCallCtx {
    * pre-execution and post-execution hooks. Use STAGE_KEYS as key names.
    */
   stageState: Map<string, unknown>;
+  /**
+   * Phase 2 — Action Governance. Set by `runRiskTier` when a risk_tier rule
+   * matches the call. The agent loop checks `forceApproval` to decide whether
+   * to gate a tool that would normally bypass approval (expert mode or
+   * autoApproveAll); `riskTier` rides on the `tool_request` SSE event so the
+   * UI can render an escalation badge.
+   */
+  riskTier?: RiskTier;
+  forceApproval?: boolean;
 }
 
 /** Canonical keys for ToolCallCtx.stageState entries. */

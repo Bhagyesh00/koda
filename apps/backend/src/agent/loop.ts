@@ -21,7 +21,7 @@ import { runSelfCorrection } from './stages/selfCorrect.js';
 import { emitReasoningProof } from './stages/reasoningProof.js';
 import { registerTurn, unregisterTurn } from './turnRegistry.js';
 import { runInterceptors } from './stages/interceptors.js';
-import { runDriftCheck, runGuardrailsCheck, emitToolRequest, computeAndEmitBlastRadius } from './stages/preApproval.js';
+import { runDriftCheck, runGuardrailsCheck, emitToolRequest, computeAndEmitBlastRadius, runArchitectureCheck, runRiskTier } from './stages/preApproval.js';
 import { runContextLens, runMentalModel, captureSemanticBefore } from './stages/preExecution.js';
 import { runTestResults, runProofVerify, runSemanticDiffCompare, runRegretJournal, runHypothesisVerify, verifyPendingHypothesisAtTurnEnd, emitTodoUpdate, emitPlanUpdate } from './stages/postExecution.js';
 import { type TurnState, type ToolCallCtx } from './stages/types.js';
@@ -38,7 +38,7 @@ const WALL_CLOCK_MS = 600_000;
  */
 const MAX_CONTEXT_CHARS = 40_000;
 
-function trimMessages(messages: OllamaMessage[]): OllamaMessage[] {
+export function trimMessages(messages: OllamaMessage[]): OllamaMessage[] {
   if (messages.length === 0) return messages;
   const [system, ...rest] = messages;
   let budget = MAX_CONTEXT_CHARS - (system?.content.length ?? 0);
@@ -49,6 +49,13 @@ function trimMessages(messages: OllamaMessage[]): OllamaMessage[] {
     if (budget - cost < 0 && kept.length >= 4) break;
     kept.unshift(msg);
     budget -= cost;
+  }
+  // A `tool` reply must follow an `assistant` message that contains the matching
+  // `tool_calls`. If the trim window starts on a `tool` message, its parent
+  // assistant has been trimmed away — Ollama then rejects the request with
+  // "tool message without preceding tool_calls". Drop leading orphans.
+  while (kept.length > 0 && kept[0]!.role === 'tool') {
+    kept.shift();
   }
   return system ? [system, ...kept] : kept;
 }
@@ -135,7 +142,7 @@ async function runTurnInner(opts: RunTurnOptions): Promise<void> {
 
   // Append user message to history
   sessionStore.appendMessage(sessionId, {
-    id: nanoid(8),
+    id: nanoid(12),
     role: 'user',
     content: userMessage,
     createdAt: Date.now(),
@@ -227,7 +234,13 @@ async function runTurnInner(opts: RunTurnOptions): Promise<void> {
   ];
 
   // Mutable turn-level state shared across all tool calls
-  const turnState: TurnState = { pendingHypothesis: null, pendingProof: null, retryTracker: new Map() };
+  const turnState: TurnState = {
+    pendingHypothesis: null,
+    pendingProof: null,
+    retryTracker: new Map(),
+    proofRetries: new Map(),
+    pendingHints: [],
+  };
 
   // ── Main agentic loop ───────────────────────────────────────────────────────
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
@@ -240,7 +253,18 @@ async function runTurnInner(opts: RunTurnOptions): Promise<void> {
       break;
     }
 
-    const messageId = nanoid(8);
+    // Phase 3 — drain pendingHints from the previous iteration's post-execution
+    // stages (proof failures, retries, etc.) so the model sees them BEFORE its
+    // next response. Hints are pushed as system messages because they are
+    // orchestrator commentary, not user input.
+    if (turnState.pendingHints.length > 0) {
+      for (const hint of turnState.pendingHints) {
+        messages.push({ role: 'system', content: hint });
+      }
+      turnState.pendingHints = [];
+    }
+
+    const messageId = nanoid(12);
     sse.send({ type: 'message_start', messageId });
     sse.send({ type: 'activity_update', phase: 'thinking' });
 
@@ -346,7 +370,7 @@ async function runTurnInner(opts: RunTurnOptions): Promise<void> {
         ? `Unknown tool: ${resolvedToolName}`
         : `Tool "${resolvedToolName}" is not allowed in plan mode.`;
       sessionStore.appendMessage(sessionId, {
-        id: nanoid(8),
+        id: nanoid(12),
         role: 'tool',
         content: msg,
         toolCallId: resolvedToolName,
@@ -364,7 +388,7 @@ async function runTurnInner(opts: RunTurnOptions): Promise<void> {
     } catch (err) {
       const msg = `Invalid args for ${tool.name}: ${err instanceof Error ? err.message : String(err)}`;
       sessionStore.appendMessage(sessionId, {
-        id: nanoid(8),
+        id: nanoid(12),
         role: 'tool',
         content: msg,
         toolCallId: callId,
@@ -396,14 +420,19 @@ async function runTurnInner(opts: RunTurnOptions): Promise<void> {
     // ── Pre-approval stages ───────────────────────────────────────────────────
     runDriftCheck(ctx);
     if (runGuardrailsCheck(ctx) === 'block') continue;
+    if (runArchitectureCheck(ctx) === 'block') continue;
+    runRiskTier(ctx); // sets ctx.riskTier and ctx.forceApproval (Phase 2)
     emitToolRequest(ctx);
     computeAndEmitBlastRadius(ctx);
 
     // ── Approval gate (stays inline: needs tool.schema for arg re-validation) ──
     // Expert mode auto-approves everything — user has opted into reduced friction.
+    // EXCEPT a high/critical risk_tier rule (ctx.forceApproval) overrides that
+    // shortcut so dangerous actions still require an explicit human go-ahead.
     let finalArgs: unknown = parsedArgs;
     const expertMode = session.mode === 'expert';
-    if (tool.requiresApproval && !autoApproveAll && !expertMode) {
+    const normallyGated = tool.requiresApproval && !autoApproveAll && !expertMode;
+    if (normallyGated || ctx.forceApproval) {
       const abortPromise = signal
         ? new Promise<ApprovalDecision>((resolve) =>
           signal.addEventListener(
@@ -419,7 +448,7 @@ async function runTurnInner(opts: RunTurnOptions): Promise<void> {
       if (dec.action === 'deny') {
         const msg = `User denied tool call${dec.reason ? `: ${dec.reason}` : ''}`;
         sessionStore.appendMessage(sessionId, {
-          id: nanoid(8),
+          id: nanoid(12),
           role: 'tool',
           content: msg,
           toolCallId: callId,
@@ -430,6 +459,9 @@ async function runTurnInner(opts: RunTurnOptions): Promise<void> {
           ts: Date.now(),
           context: `${tool.name} call`,
           rejected: typeof parsedArgs === 'string' ? parsedArgs : JSON.stringify(parsedArgs).slice(0, 300),
+          // Decision Ledger: pull the user's deny reason through to the ledger so
+          // /v1/ledger entries explain WHY the rejection happened, not just that it did.
+          reason: dec.reason,
         });
         sse.send({ type: 'tool_result', callId, ok: false, output: msg });
         continue;
@@ -467,7 +499,7 @@ async function runTurnInner(opts: RunTurnOptions): Promise<void> {
     let ok = true;
     const toolSpan = trace?.span({ name: tool.name, input: JSON.stringify(finalArgs) });
     try {
-      output = await tool.run(finalArgs, { sessionId, workDir, signal });
+      output = await tool.run(finalArgs, { sessionId, workDir, signal, sse });
       toolSpan?.end({ output: output.slice(0, 1_000) });
     } catch (err) {
       ok = false;
@@ -499,7 +531,7 @@ async function runTurnInner(opts: RunTurnOptions): Promise<void> {
     auditLog({ sessionId, tool: tool.name, callId, ok, ts: Date.now() });
     const storedOutput = truncateOutput(output);
     sessionStore.appendMessage(sessionId, {
-      id: nanoid(8),
+      id: nanoid(12),
       role: 'tool',
       content: storedOutput,
       toolCallId: callId,
