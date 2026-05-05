@@ -3,7 +3,7 @@ import type { SSEWriter } from '../sse.js';
 import { getTool } from '../tools/index.js';
 import { config } from '../config.js';
 import { streamOllamaChat, type OllamaMessage, type OllamaToolDef } from './ollama.js';
-import { buildSystemPrompt } from './prompts.js';
+import { buildSystemPrompt, formatArgValidationHint } from './prompts.js';
 import { parseAllToolCalls, stripThinkingBlocks, extractThinkingBlocks } from './parser.js';
 import { getSkill } from '../skills/registry.js';
 import { TOOL_DESCRIPTORS } from '@koda/shared';
@@ -101,6 +101,11 @@ export async function runSubAgent(
   const maxIter = task.maxIterations ?? 5;
   let finalText = '';
 
+  // Phase 6 Fix 5: track which (tool, args-shape) pairs have already been
+  // hinted so we don't loop forever showing the same correction. One hint
+  // per shape — second failure of the same shape is terminal.
+  const argHintsSeen = new Set<string>();
+
   try {
   for (let iter = 0; iter < maxIter; iter++) {
     if (signal.aborted) break;
@@ -165,8 +170,28 @@ export async function runSubAgent(
     try {
       parsedArgs = tool.schema.parse(toolArgs);
     } catch (err) {
-      const msg = `Invalid args for ${toolName}: ${err instanceof Error ? err.message : String(err)}`;
+      const errMessage = err instanceof Error ? err.message : String(err);
+      const msg = `Invalid args for ${toolName}: ${errMessage}`;
       messages.push({ role: 'tool', content: msg });
+      onEvent({ type: 'tool_result', tool: toolName, ok: false, output: msg });
+
+      // Phase 6 Fix 5: one-shot retry-with-hint. First time we see this exact
+      // (tool, args-shape) pair, push a structured correction as a system
+      // message so the model knows what shape to use. Second time the same
+      // shape fails, give up — the model isn't going to learn from a third try.
+      const shapeKey = `${toolName}:${JSON.stringify(toolArgs).slice(0, 200)}`;
+      if (!argHintsSeen.has(shapeKey)) {
+        argHintsSeen.add(shapeKey);
+        messages.push({
+          role: 'system',
+          content: formatArgValidationHint({
+            toolName,
+            args: toolArgs,
+            error: errMessage,
+            schema: tool.schema,
+          }),
+        });
+      }
       continue;
     }
 

@@ -31,6 +31,8 @@ function makeTurnState(): TurnState {
     retryTracker: new Map(),
     proofRetries: new Map(),
     pendingHints: [],
+    consecutiveFailures: 0,
+    recentFailures: [],
   };
 }
 

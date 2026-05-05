@@ -124,19 +124,110 @@ function extractJsonBlock(text: string): string | null {
 
 /**
  * Parse an agent's raw output into a Contribution. Returns null when the
- * output isn't structured (the caller falls back to free-form mode).
+ * output has no recoverable structure at all (caller falls back to free-form).
+ *
+ * Tries strategies in order:
+ *   1. JSON block (fenced or first balanced object) → strict ContributionSchema
+ *   2. Markdown headers (`### Claim`, `### Evidence`, …) → coerced Contribution
+ *
+ * Phase 6 Fix 4: small local models often emit well-organised markdown when
+ * asked for "structured output", but trip over JSON syntax (missing brace,
+ * unescaped quote). The markdown fallback rescues those rounds so the
+ * synthesizer/aggregator doesn't throw away their position.
  */
 export function parseContribution(raw: string): Contribution | null {
   const block = extractJsonBlock(raw);
-  if (!block) return null;
-  try {
-    const parsed = JSON.parse(block);
-    const validated = ContributionSchema.safeParse(parsed);
-    if (validated.success) return validated.data;
-    return null;
-  } catch {
-    return null;
+  if (block) {
+    try {
+      const parsed = JSON.parse(block);
+      const validated = ContributionSchema.safeParse(parsed);
+      if (validated.success) return validated.data;
+      // JSON was syntactically valid but didn't fit our schema — fall through
+      // to markdown which may rescue partial info.
+    } catch {
+      // JSON syntax error — fall through to markdown.
+    }
   }
+  return parseContributionMarkdown(raw);
+}
+
+/**
+ * Markdown-headers fallback parser. Scans for `## Claim` / `### Claim` and
+ * the four other section names, bucketing lines until the next header.
+ * Returns null only when no recognisable claim is present.
+ */
+export function parseContributionMarkdown(raw: string): Contribution | null {
+  // Accept ## or ### (h1 is reserved for synthesis output).
+  const headerRe = /^##{1,2}\s+(claim|evidence|confidence|dissents|notes)\s*:?\s*$/i;
+  const lines = raw.split(/\r?\n/);
+
+  type Section = 'claim' | 'evidence' | 'confidence' | 'dissents' | 'notes';
+  const buckets: Record<Section, string[]> = {
+    claim: [], evidence: [], confidence: [], dissents: [], notes: [],
+  };
+  let current: Section | null = null;
+  for (const line of lines) {
+    const m = line.match(headerRe);
+    if (m) {
+      current = m[1]!.toLowerCase() as Section;
+      continue;
+    }
+    if (current) buckets[current].push(line);
+  }
+
+  const claim = buckets.claim.join('\n').trim();
+  if (!claim) return null;
+
+  const evidence = buckets.evidence
+    .join('\n')
+    .split(/\r?\n/)
+    .map((l) => l.replace(/^[-*+]\s+/, '').trim())
+    .filter((l) => l.length > 0);
+
+  const confidenceRaw = buckets.confidence.join(' ').trim();
+  const confidenceMatch = confidenceRaw.match(/-?\d+/);
+  let confidence = 50;
+  if (confidenceMatch) {
+    const n = parseInt(confidenceMatch[0]!, 10);
+    if (Number.isFinite(n)) confidence = Math.max(0, Math.min(100, n));
+  }
+
+  // Dissent lines look like:
+  //   - role: "their claim" — reason
+  //   - [role] reason
+  //   - role — reason
+  const dissents: Contribution['dissents'] = [];
+  for (const rawLine of buckets.dissents) {
+    const stripped = rawLine.replace(/^[-*+]\s+/, '').trim();
+    if (!stripped) continue;
+    const dissent = parseDissentLine(stripped);
+    if (dissent) dissents.push(dissent);
+  }
+
+  const notes = buckets.notes.join('\n').trim() || undefined;
+
+  const candidate = { claim: claim.slice(0, 2000), evidence, confidence, dissents, notes };
+  const validated = ContributionSchema.safeParse(candidate);
+  return validated.success ? validated.data : null;
+}
+
+function parseDissentLine(line: string): { targetRole: string; targetClaim: string; reason: string } | null {
+  // [role] reason
+  const bracket = line.match(/^\[([^\]]+)\]\s*(.+)$/);
+  if (bracket) {
+    return { targetRole: bracket[1]!.trim(), targetClaim: '', reason: bracket[2]!.trim() };
+  }
+  // role: "their claim" — reason   (em or hyphen)
+  const quoted = line.match(/^([^:]+):\s*"([^"]+)"\s*[—-]\s*(.+)$/);
+  if (quoted) {
+    return { targetRole: quoted[1]!.trim(), targetClaim: quoted[2]!.trim(), reason: quoted[3]!.trim() };
+  }
+  // role — reason
+  const dashed = line.match(/^([^—-]+?)\s*[—-]\s*(.+)$/);
+  if (dashed) {
+    return { targetRole: dashed[1]!.trim(), targetClaim: '', reason: dashed[2]!.trim() };
+  }
+  return null;
 }
 
 // ── Prompt builders ──────────────────────────────────────────────────────────

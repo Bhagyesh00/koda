@@ -23,6 +23,17 @@ export interface TurnState {
    * so the model gets the failure context before its next response.
    */
   pendingHints: string[];
+  /**
+   * Phase 6 follow-up — auto-think / strategy-reset detection.
+   *
+   * `consecutiveFailures` increments on every failed tool call and resets to 0
+   * on any successful call. When it crosses STUCK_THRESHOLD the loop pushes a
+   * "stop and rethink" hint instead of (or in addition to) the per-tool
+   * buildErrorHint. `recentFailures` keeps a rolling tail (≤5) used to render
+   * the hint's concrete failure summary.
+   */
+  consecutiveFailures: number;
+  recentFailures: Array<{ tool: string; errorPreview: string; ts: number }>;
 }
 
 /** Minimal tool descriptor needed by stage functions. */

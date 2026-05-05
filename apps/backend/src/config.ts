@@ -30,6 +30,15 @@ const ConfigSchema = z.object({
   OLLAMA_MODEL: z.string().min(1).default('koda'),
   /** Context window size passed to Ollama. Increase for larger codebases. */
   OLLAMA_NUM_CTX: z.coerce.number().int().positive().default(32768),
+  /**
+   * Soft cap on bytes of `thinking`-channel output per single LLM response.
+   * When exceeded, streamOllamaChat closes the <think> tag and stops forwarding
+   * further thinking deltas (the model can still emit tool calls or content).
+   * Caller is notified via onThinkingBudgetExceeded so it can inject a "make a
+   * decision now" hint into the next loop iteration. ~16 000 chars ≈ 4 000 tokens.
+   * Set to 0 to disable the cap entirely.
+   */
+  OLLAMA_THINK_BUDGET_BYTES: z.coerce.number().int().min(0).default(16_000),
   /** Optional HTTP Basic Auth credentials for a password-protected Ollama server. */
   OLLAMA_USERNAME: z.string().optional(),
   OLLAMA_PASSWORD: z.string().optional(),

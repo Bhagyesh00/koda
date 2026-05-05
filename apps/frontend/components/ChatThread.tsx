@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useEffect, useMemo, useRef } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useChatStore, type SubAgentDisplay } from '@/lib/store';
 import { stripThinkingBlocks } from '@/lib/thinkingParser';
 import { MessageBubble } from './MessageBubble';
@@ -25,6 +25,15 @@ export function ChatThread({ onDecisionResolve, onReplay }: Props) {
   const subAgents = useChatStore((s) => s.subAgents);
   const subAgentOrder = useChatStore((s) => s.subAgentOrder);
   const ref = useRef<HTMLDivElement>(null);
+  // Pinned-to-bottom state. We default to true so the first paint scrolls down,
+  // and flip it off when the user manually scrolls up — so streaming text
+  // doesn't yank them back to the bottom while they're reading earlier content.
+  const stickToBottomRef = useRef(true);
+  // rAF coalescing flag. Without this, a 100-token assistant response queues
+  // 100 scrollTo() calls in the same frame; with smooth scrolling each one
+  // restarts the animation from a fresh position — the visible "up-down-up-down"
+  // bounce. One scroll per frame is plenty.
+  const scrollPendingRef = useRef(false);
 
   // Project the keyed map back into an ordered array, attaching the derived
   // `index` the panel needs for stable color/animation slots.
@@ -41,8 +50,30 @@ export function ChatThread({ onDecisionResolve, onReplay }: Props) {
   const allSubAgentsDone =
     subAgentArr.length > 0 && subAgentArr.every((a) => a.status !== 'running');
 
+  // Re-engage stick-to-bottom when the user scrolls within ~80 px of the floor;
+  // disengage as soon as they scroll away. The ref-only update avoids a re-render
+  // per scroll tick (which would itself worsen the flicker we just fixed).
+  const handleScroll = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottomRef.current = distanceFromBottom < 80;
+  }, []);
+
   useEffect(() => {
-    ref.current?.scrollTo({ top: ref.current.scrollHeight, behavior: 'smooth' });
+    if (!stickToBottomRef.current) return;
+    if (scrollPendingRef.current) return;
+    scrollPendingRef.current = true;
+    requestAnimationFrame(() => {
+      scrollPendingRef.current = false;
+      const el = ref.current;
+      if (!el) return;
+      // Direct scrollTop assignment, NOT smooth — smooth animations stack
+      // every delta and create the visible scroll-bounce. The eye doesn't
+      // notice instant jumps when the new content is the same prose growing
+      // line-by-line, but it does notice repeated 300 ms animations interrupting.
+      el.scrollTop = el.scrollHeight;
+    });
   }, [messages, subAgentArr.length]);
 
   return (

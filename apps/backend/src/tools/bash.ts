@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { BashArgs } from '@koda/shared';
 import type { Tool } from './registry.js';
 import { runShell } from '../sandbox/exec.js';
@@ -44,20 +45,39 @@ export const bashTool: Tool<typeof BashArgs._type> = {
   async run(args, ctx) {
     // Use the session's persisted shell CWD so that `cd` commands from previous
     // turns are still in effect (mirrors a real terminal session).
-    const shellCwd = getShellCwd(ctx.sessionId, ctx.workDir);
+    let shellCwd = getShellCwd(ctx.sessionId, ctx.workDir);
+
+    // Self-heal a stale shell cwd. The persisted cwd can become invalid if a
+    // previous `cd` landed somewhere that's since been deleted, OR if a series
+    // of compounding `cd` commands built a non-existent nested path before
+    // trackCd's existence check was added. Recover to the workspace root and
+    // surface the recovery so the model knows.
+    const recoveryNotes: string[] = [];
+    if (!fs.existsSync(shellCwd)) {
+      recoveryNotes.push(
+        `(shell cwd ${shellCwd} no longer exists — recovered to workspace root ${ctx.workDir})`,
+      );
+      shellCwd = ctx.workDir;
+      setShellCwd(ctx.sessionId, ctx.workDir);
+    }
+
+    // Resolve any `cd` directives BEFORE running the command. The previous
+    // implementation did this after, so an in-command `cd` was tracked but
+    // could resolve to a non-existent path that future calls inherited.
+    // trackCd now refuses non-existent targets and reports them as warnings.
+    const tracked = trackCd(args.command, shellCwd);
+    if (tracked.cwd !== shellCwd) {
+      setShellCwd(ctx.sessionId, tracked.cwd);
+    }
 
     const result = await runShell(args.command, { cwd: shellCwd, timeoutMs: args.timeoutMs, signal: ctx.signal });
 
-    // Track any `cd` calls so the next bash turn starts in the right directory.
-    const newCwd = trackCd(args.command, shellCwd);
-    if (newCwd !== shellCwd) {
-      setShellCwd(ctx.sessionId, newCwd);
-    }
-
     const parts: string[] = [];
     // Show current directory so the user always knows where they are.
-    parts.push(`cwd: ${newCwd}`);
+    parts.push(`cwd: ${tracked.cwd}`);
     parts.push(`exit: ${result.exitCode}${result.timedOut ? ' (timed out)' : ''}`);
+    for (const note of recoveryNotes) parts.push(note);
+    for (const warning of tracked.warnings) parts.push(`⚠ ${warning}`);
     if (result.stdout) parts.push(`stdout:\n${result.stdout}`);
     if (result.stderr) parts.push(`stderr:\n${result.stderr}`);
 

@@ -7,6 +7,13 @@ export function stripThinkingBlocks(text: string): string {
     .replace(/<think>[\s\S]*$/g, '')
     // Tool-call fences are rendered as ToolCallCard separately; strip from prose
     .replace(/```tool_call[\s\S]*?```/g, '')
+    // Harmony / channel-format special tokens (<|tool_call|>, <|channel|>,
+    // <|message|>, etc.) leak from some OSS base models when their chat
+    // template doesn't strip them. Treat them as invisible — the structured
+    // content gets parsed elsewhere; here we just want clean prose.
+    .replace(/<\|[^|>]*\|>/g, '')
+    // Loose `call:name{...}` fragments emitted alongside leaked tokens.
+    .replace(/\bcall\s*:\s*[a-z_][a-z0-9_]*\s*\{[\s\S]*?\}/gi, '')
     .trim();
 }
 

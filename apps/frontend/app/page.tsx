@@ -24,6 +24,7 @@ import { FolderPicker } from '@/components/FolderPicker';
 import { MiniAgentPanel } from '@/components/MiniAgentPanel';
 import { TokenDashboard } from '@/components/TokenDashboard';
 import { useChatStore } from '@/lib/store';
+import { useShallow } from 'zustand/react/shallow';
 import { startChatStream, startWatchStream } from '@/lib/sseClient';
 import { createChatStreamHandler } from '@/lib/sseHandlers';
 import { getSession, listSessions, getPlan, createSession, updateSessionCwd } from '@/lib/api';
@@ -49,9 +50,25 @@ export default function Page() {
 
   const autoAccept = useChatStore((s) => s.autoAccept);
 
+  // Subscribe ONLY to state values that this component actually renders.
+  // A bare `useChatStore()` call would re-render Page on every SSE delta,
+  // re-rendering Sidebar / HeroHeader / TodoPanel / ContextStrip with it —
+  // visible as a flicker every time a chunk arrives during streaming.
+  const { streaming, mode, guardrailsOpen, contextLensOpen, hypothesisLogOpen, mentalModelOpen } =
+    useChatStore(
+      useShallow((s) => ({
+        streaming: s.streaming,
+        mode: s.mode,
+        guardrailsOpen: s.guardrailsOpen,
+        contextLensOpen: s.contextLensOpen,
+        hypothesisLogOpen: s.hypothesisLogOpen,
+        mentalModelOpen: s.mentalModelOpen,
+      })),
+    );
+
+  // Actions are stable references in Zustand — pulling them via getState()
+  // means the component never re-renders just because an action was called.
   const {
-    streaming,
-    mode,
     reset,
     appendUser,
     startAssistant,
@@ -67,18 +84,14 @@ export default function Page() {
     addThinking,
     setActivity,
     addToast,
-    guardrailsOpen,
     setGuardrailsOpen,
-    contextLensOpen,
-    hypothesisLogOpen,
-    mentalModelOpen,
     setMentalModelOpen,
     addDecision,
     resolveDecisionCard,
     setContextFiles,
     updateHypothesisEntry,
     addWorkspaceChange,
-  } = useChatStore();
+  } = useChatStore.getState();
 
   function startNewChat() {
     setSessionId(null);

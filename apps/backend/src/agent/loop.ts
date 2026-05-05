@@ -8,7 +8,8 @@ import { approvalQueue } from '../approval/queue.js';
 import { logger } from '../logger.js';
 import { config } from '../config.js';
 import { streamOllamaChat, type OllamaMessage, type OllamaToolCall, type OllamaToolDef } from './ollama.js';
-import { buildSystemPrompt, buildPlanModePrompt, buildErrorHint } from './prompts.js';
+import { buildSystemPrompt, buildPlanModePrompt, buildErrorHint, formatArgValidationHint } from './prompts.js';
+import { buildStrategyResetHint, recordToolOutcome } from './stuckDetector.js';
 import { getSkill } from '../skills/registry.js';
 import { parseAllToolCalls, extractThinkingBlocks, stripThinkingBlocks } from './parser.js';
 import { TOOL_DESCRIPTORS, type ApprovalDecision } from '@koda/shared';
@@ -240,6 +241,8 @@ async function runTurnInner(opts: RunTurnOptions): Promise<void> {
     retryTracker: new Map(),
     proofRetries: new Map(),
     pendingHints: [],
+    consecutiveFailures: 0,
+    recentFailures: [],
   };
 
   // ── Main agentic loop ───────────────────────────────────────────────────────
@@ -285,7 +288,23 @@ async function runTurnInner(opts: RunTurnOptions): Promise<void> {
           sse.send({ type: 'delta', messageId, text: delta });
         },
         signal,
-        { tools: toolDefs, model: session.model },
+        {
+          tools: toolDefs,
+          model: session.model,
+          // Phase 6 Fix 3: when the model burns through its thinking budget
+          // without producing a tool call, push a "decide now" hint so the
+          // next iteration knows to force forward progress.
+          onThinkingBudgetExceeded: (bytes) => {
+            turnState.pendingHints.push(
+              `<thinking_budget_exceeded bytes="${bytes}">\n` +
+              `You spent the entire thinking budget (${bytes} bytes) without ` +
+              `producing a tool call or final answer. Make a decision NOW: ` +
+              `either call exactly ONE tool with a tool_call fence, or reply ` +
+              `in plain text. Do not start a new <think> block.\n` +
+              `</thinking_budget_exceeded>`,
+            );
+          },
+        },
       );
       nativeToolCalls = result.toolCalls;
       generation?.end({ output: assistantText });
@@ -386,7 +405,8 @@ async function runTurnInner(opts: RunTurnOptions): Promise<void> {
     try {
       parsedArgs = tool.schema.parse(resolvedToolArgs);
     } catch (err) {
-      const msg = `Invalid args for ${tool.name}: ${err instanceof Error ? err.message : String(err)}`;
+      const errMessage = err instanceof Error ? err.message : String(err);
+      const msg = `Invalid args for ${tool.name}: ${errMessage}`;
       sessionStore.appendMessage(sessionId, {
         id: nanoid(12),
         role: 'tool',
@@ -395,6 +415,24 @@ async function runTurnInner(opts: RunTurnOptions): Promise<void> {
         createdAt: Date.now(),
       });
       sse.send({ type: 'tool_result', callId, ok: false, output: msg });
+
+      // Phase 6 Fix 1: push a structured hint into pendingHints so the next
+      // iteration's system message tells the model exactly which keys it got
+      // wrong and what shape to use. Dedup per (tool, args-shape) per turn so
+      // a stubborn model can't bloat the prompt forever.
+      const argHashKey = `argval:${tool.name}:${JSON.stringify(resolvedToolArgs).slice(0, 200)}`;
+      const seen = turnState.retryTracker.get(argHashKey) ?? 0;
+      if (seen === 0) {
+        turnState.retryTracker.set(argHashKey, 1);
+        turnState.pendingHints.push(
+          formatArgValidationHint({
+            toolName: tool.name,
+            args: resolvedToolArgs,
+            error: errMessage,
+            schema: tool.schema,
+          }),
+        );
+      }
       continue;
     }
 
@@ -526,6 +564,27 @@ async function runTurnInner(opts: RunTurnOptions): Promise<void> {
         messages.push({ role: 'system', content: hint });
         sse.send({ type: 'activity_update', phase: 'thinking', detail: 'analyzing error...' });
       }
+    }
+
+    // Auto-think / strategy reset: track consecutive failures across all
+    // tools. Per-tool retry hints handle "same call, slightly different
+    // args"; the strategy reset handles "this whole approach is broken".
+    // recordToolOutcome owns the counter + rolling-window logic; we just act
+    // on its boolean return.
+    const shouldEmitReset = recordToolOutcome(turnState, {
+      ok,
+      tool: tool.name,
+      errorPreview: output,
+      ts: Date.now(),
+    });
+    if (shouldEmitReset) {
+      const resetHint = buildStrategyResetHint(turnState.recentFailures);
+      messages.push({ role: 'system', content: resetHint });
+      sse.send({
+        type: 'activity_update',
+        phase: 'thinking',
+        detail: `stuck after ${turnState.consecutiveFailures} failures — rethinking approach…`,
+      });
     }
 
     auditLog({ sessionId, tool: tool.name, callId, ok, ts: Date.now() });

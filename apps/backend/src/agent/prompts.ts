@@ -1,6 +1,7 @@
 import os from 'node:os';
 import { TOOL_DESCRIPTORS } from '@koda/shared';
-import { zodToJsonSchemaLite } from './zodSchema.js';
+import { z } from 'zod';
+import { zodToJsonSchemaLite, exampleToolCallLine } from './zodSchema.js';
 
 function detectPlatform(): string {
   const p = process.platform;
@@ -18,7 +19,13 @@ const PLAN_MODE_TOOL_NAMES = new Set([
 ]);
 const BUILD_MODE_EXCLUDED = new Set(['plan_write']);
 
-/** Compact one-liner per tool: name(arg:type, …) — description */
+/**
+ * Compact per-tool docs: signature + description + concrete JSON example.
+ *
+ * The example line is the single most impactful guidance for small local models —
+ * they generalise far better from `{"name":"read_file","args":{"path":"src/index.ts"}}`
+ * than from prose schemas. See zodSchema.ts:exampleToolCallLine for stub generation.
+ */
 function renderToolDocs(filter: (name: string) => boolean): string {
   return TOOL_DESCRIPTORS.filter((t) => filter(t.name))
     .map((t) => {
@@ -28,7 +35,8 @@ function renderToolDocs(filter: (name: string) => boolean): string {
             .map(([k, v]) => `${k}:${v.type ?? 'any'}`)
             .join(', ')
         : '';
-      return `- ${t.name}(${args}) — ${t.description}`;
+      const example = exampleToolCallLine(t.name, t.schema as z.ZodTypeAny);
+      return `- ${t.name}(${args}) — ${t.description}\n  example: ${example}`;
     })
     .join('\n');
 }
@@ -79,6 +87,8 @@ Rules:
 - Wait for the tool result before proceeding.
 - When you are finished with all tool calls, reply with a plain-text summary (no fence).
 - Never fabricate tool results. If a file doesn't exist, the tool will tell you.
+- **Never emit pipe-bar special tokens** like \`<|tool_call|>\`, \`<|channel|>\`, \`<|message|>\`, \`<|return|>\`, or any other \`<|...|>\` form. They are not valid syntax here. Use ONLY the \`\`\`tool_call fence above.
+- **Never emit \`call:name{...}\` syntax.** That is not the tool-call format. Use ONLY the \`\`\`tool_call fence with valid JSON inside.
 
 ## Workflow for Common Tasks
 
@@ -151,6 +161,17 @@ You have two tools for accessing the internet:
 - **web_fetch(url)** — fetch any public URL and read its content as text; use when you have a specific doc page, GitHub file, or API reference to read.
 
 Always prefer local files first. Use web tools when local knowledge is insufficient or out of date.
+
+## Inline Context Tags (sent BY the user)
+When the user attaches files via the @-mention picker, their message contains XML-shaped context blocks. These are ALWAYS authoritative references — treat them as the user explicitly handing you that file/folder/query.
+
+- \`<file path="src/foo.ts">\\n\\\`\\\`\\\`\\n<contents>\\n\\\`\\\`\\\`\\n</file>\` — the user has attached the literal contents of that file. Use \`path\` for any subsequent edit/read tool calls; do NOT re-read the file unless it changed.
+- \`<folder path="src/lib" />\` — the user wants you to consider this directory as scope. Start with \`list_dir\` or \`glob\` against this path.
+- \`<web_search query="..." />\` — the user wants you to perform a web search with this query.
+
+**Cross-turn continuity**: paths mentioned in any earlier user message stay in scope for the rest of the conversation unless the user explicitly switches files. If a follow-up question says "fix the bug" without naming a file, the most recently attached \`<file path="...">\` IS the file. Use it without asking.
+
+When emitting tool calls that operate on these paths, copy the \`path=\` attribute value verbatim — do NOT prefix with the working directory; relative paths are already resolved against it.
 
 ## Important Constraints
 - Do not use web tools for private/internal URLs that require authentication.
@@ -266,4 +287,41 @@ Think step by step in <think> tags:
 
 IMPORTANT: Do NOT repeat the same command. Try a genuinely different approach.${lastAttemptNote}
 </error_resolution>`;
+}
+
+/**
+ * Build a hint shown to the LLM when its tool args fail Zod validation.
+ *
+ * Phase 6 Fix 1: small local models often retry with the same broken arg shape
+ * because the previous "Invalid args" tool_result didn't tell them WHAT was
+ * wrong or what the correct shape is. This hint shows the rejected payload,
+ * the validator's complaint, and a concrete example matching the schema.
+ *
+ * Used by both [agent/loop.ts] (full agent) and [agent/subAgent.ts] (sub-agents).
+ */
+export function formatArgValidationHint(opts: {
+  toolName: string;
+  args: unknown;
+  error: string;
+  schema: z.ZodTypeAny;
+}): string {
+  const argsPreview = JSON.stringify(opts.args ?? {}, null, 2).slice(0, 600);
+  const errorPreview = opts.error.slice(0, 600);
+  const example = exampleToolCallLine(opts.toolName, opts.schema);
+  const jsonSchema = JSON.stringify(zodToJsonSchemaLite(opts.schema));
+  return `<arg_validation_failed tool="${opts.toolName}">
+You called "${opts.toolName}" with these args:
+${argsPreview}
+
+Validation rejected them:
+${errorPreview}
+
+Required schema:
+${jsonSchema}
+
+Correct call shape:
+${example}
+
+Try the call again with the correct keys. Do NOT repeat the broken shape.
+</arg_validation_failed>`;
 }
